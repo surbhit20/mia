@@ -17,12 +17,16 @@ end tell
 """
 
 def find_active_meet_tab() -> str | None:
-    result = subprocess.run(
-        ["osascript", "-e", _APPLESCRIPT],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", _APPLESCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+
     if result.returncode != 0:
         return None
     for url in result.stdout.split(", "):
