@@ -16,9 +16,9 @@ class WakeWordMatcher:
     def matches(self, text: str) -> bool:
         words = _normalize(text).split()
         if len(words) < self._window_size:
-            return fuzz.ratio(" ".join(words), self._wake_word) >= self._threshold_pct
+            return fuzz.partial_ratio(" ".join(words), self._wake_word) >= self._threshold_pct
         for i in range(len(words) - self._window_size + 1):
             window = " ".join(words[i : i + self._window_size])
-            if fuzz.ratio(window, self._wake_word) >= self._threshold_pct:
+            if fuzz.partial_ratio(window, self._wake_word) >= self._threshold_pct:
                 return True
         return False

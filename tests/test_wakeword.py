@@ -7,7 +7,7 @@ def test_exact_match():
 def test_phonetic_mishearing_matches():
     m = WakeWordMatcher("hey bot")
     assert m.matches("hay bot can you help") is True
-    assert m.matches("ay bot please block this") is True
+    assert m.matches("a bot please block this") is True
 
 def test_unrelated_text_does_not_match():
     m = WakeWordMatcher("hey bot")
