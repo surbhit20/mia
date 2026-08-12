@@ -1,0 +1,109 @@
+# Decisions Log
+
+Every non-obvious decision made while designing or implementing this project
+— what was decided, why, and what else was considered. Not for routine or
+self-evident code changes; for anything where a different call could
+reasonably have been made (architecture, library/tool choice, scope cuts,
+reversals of earlier decisions).
+
+Newest entries at the top. When implementation surfaces a decision not
+already covered by the design spec (`docs/superpowers/specs/`), log it here
+at the time it's made, not retroactively.
+
+---
+
+## 2026-08-12 — Split `main` (README-only) from `mia` (active development)
+
+**Why:** Keep the repo's default branch minimal/presentable; all spec docs
+and implementation work happen on `mia` instead.
+**Alternatives considered:** Single branch with everything — simpler, but
+mixes a landing-page README with in-progress design churn.
+
+## 2026-08-12 — Join-trigger: local mic + Meet-tab detection, not calendar
+
+**Why:** Calendar-based auto-join misses ad-hoc/calendar-less meetings and
+never asks for confirmation before joining. Researched how Fireflies, Otter,
+Fathom, Granola, and Wispr Flow's Notetaker detect meetings — the pattern
+that handles calendar-less meetings is device-level mic activity combined
+with detecting an active call, with calendar used only as optional
+enrichment, never as the trigger.
+**Alternatives considered:** Calendar-only polling with auto-join (original
+design, replaced); mic activity alone (rejected — too many false positives
+from dictation, Voice Memos, phone calls with no Meet tab open).
+
+## 2026-08-12 — Five hardening fixes to the live-voice design
+
+**Why:** Concrete, verified technical gaps in the original live-voice
+architecture:
+- Launch Chromium with `--use-fake-ui-for-media-stream` — no human is
+  present to click the mic/camera permission prompt.
+- Explicit voice-turn state manager to gate STT processing while TTS is
+  playing — otherwise the bot can hear and react to its own synthesized
+  voice looping back through the virtual mic.
+- Fuzzy (Levenshtein) wake-word matching instead of exact string match —
+  STT mishears accents/noise ("hay bot," "a bot").
+- Audio device selection (BlackHole) done once manually inside Meet's own
+  UI, persisted per Chromium profile — not scripted per run.
+- Local VAD on raw audio frames for turn-taking, instead of waiting on
+  STT's own endpointing/punctuation signal — meaningfully lower latency.
+
+## 2026-08-12 — Pivot: live voice agent, not a transcript/summary pipeline
+
+**Why:** Explicit user requirement — the transcript must never be the
+primary source of information or a deliverable. Speech should only be used
+transiently to detect a wake word and capture a command, with real Google
+API calls (e.g. blocking calendar time) executed live, in the meeting, with
+a spoken confirmation. Nothing meeting-related is written to disk
+afterward.
+**Alternatives considered:** The original design (scrape live captions,
+summarize post-call via LLM, write to a Google Doc) — abandoned before
+implementation once this requirement was stated.
+
+## 2026-08-12 — Logging: Logfire instead of plain rotating file logs
+
+**Why:** The pipeline is multi-stage and per-meeting; Logfire's
+OpenTelemetry-based spans give a per-meeting/per-turn timeline (join
+latency, wake-to-command latency, tool execution time) in a dashboard,
+instead of grepping flat log lines. Free tier (10M spans/month) comfortably
+covers solo use. Must never be a hard dependency — logging calls are
+fire-and-forget so an unreachable Logfire backend can't block the live
+voice loop.
+**Alternatives considered:** Local rotating file handler (`logging` module)
+— simpler, no external account, but no structured per-meeting tracing.
+
+## 2026-08-12 — Runtime: local machine only
+
+**Why:** Simplest to start; the bot only needs to run while meetings are
+happening, not 24/7.
+**Alternatives considered:** Always-on cloud VM — more reliable (works even
+if the laptop is off), but adds hosting/ops cost and complexity not
+justified yet.
+
+## 2026-08-12 — Language: Python
+
+**Why:** User preference; Playwright's Python bindings are fully supported,
+and it keeps the LLM/summarization side (now voice-agent side) in the same
+language.
+**Alternatives considered:** TypeScript/Node.js — more meeting-bot reference
+code exists in Node (Recall.ai, Attendee.dev), but not chosen.
+
+## 2026-08-12 — Dedicated bot Google account, not the user's own account
+
+**Why:** Makes it visually clear to other participants that a bot is
+present; avoids session/login conflicts with the user's own normal Meet
+usage.
+**Alternatives considered:** Logging in as the user — simpler (no invite
+step), but less transparent to other participants and can't coexist with
+the user's own browser session.
+
+## 2026-08-12 — Build the Meet-join mechanism in-house (Playwright)
+
+**Why:** Deliberate choice to learn the mechanics directly and keep meeting
+audio off third-party infrastructure, even though it means owning the
+maintenance burden of Google changing the Meet UI or tightening bot
+detection.
+**Alternatives considered:** Commercial Meeting Bot API (Recall.ai,
+MeetGeek) — least maintenance, but meeting audio flows through a third
+party and costs per-minute. Self-hosted open source (Attendee.dev, Vexa) —
+no third-party data flow and less maintenance than building from scratch,
+but less learning value and less control.
