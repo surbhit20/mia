@@ -12,6 +12,52 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-12 — Accepted: Deepgram keepalive can't fire during a blocking voice turn
+
+**Why:** The final whole-branch review's fix for "no keepalive, dead socket
+ejects the bot" (`stt.py`'s `send_keepalive_if_idle()`) is driven from the
+same loop thread that blocks synchronously through `dispatch_command`
+(Claude), `synthesize` (ElevenLabs), and `inject_into_virtual_mic` (blocking
+playback) — so for a voice turn lasting the full 7-12s the original finding
+described, the keepalive is structurally unable to fire until *after* that
+window, not during it. The re-review caught this; it's a narrower, already-
+acknowledged residual (no reconnect logic was ever in scope), not a
+regression of the part that matters most: an exception from a dead socket no
+longer crashes the loop or ejects the bot — verified by execution — it now
+degrades to "deaf until re-triggered" instead.
+**How to apply:** Accepted as-is rather than triggering a second fix wave,
+since (a) the dangerous failure mode is closed and verified, and (b) fully
+validating any further fix needs a real Deepgram session anyway, consistent
+with this project's live-tuning-required constants elsewhere. First thing to
+try if live testing shows the bot going deaf mid-turn: send a keepalive
+immediately before entering the blocking Claude/TTS/injection section in
+`main.py`'s `_run_call_loop`, in addition to the existing idle-based one.
+
+## 2026-08-12 — Final-review fix pass: wake word, dedup TTL, frame size
+
+**Why:** Whole-branch review surfaced choices the per-task reviews couldn't
+see. Three of the fixes had real alternatives:
+- **Wake word `hey mia`, not `hey bot`.** "hey bot" fuzzy-matched ordinary
+  meeting speech ("the bottom line", "they both agreed") 4/20 times at the
+  shipped threshold; "hey mia" scored 0/20 with every true positive still
+  matching. Raising the threshold instead was rejected — "they both" scores
+  100.0, so no threshold separates it.
+- **State entries expire after 4 hours** instead of never. Meet URLs are
+  stable across a recurring event, so a permanent "skipped" blacklisted
+  tomorrow's standup. Four hours outlives any single meeting (no call can
+  re-prompt itself mid-session) and clears well before the next day.
+  Alternative considered: expiring only "skipped"/"prompted" — rejected, a
+  stale "joined" from a crashed run is the same trap.
+- **32ms audio frames, not the spec's 30ms.** silero-vad's window is exactly
+  512 samples at 16kHz; 30ms is 480 and was zero-padded on every inference.
+  `FrameVAD` now rejects a mismatched `frame_ms` rather than silently
+  padding, and the end-of-command silence run was retuned (24 frames) to
+  keep the same ~768ms window.
+
+**Also:** `LOGFIRE_TOKEN` became optional (the spec requires Logfire never
+be a hard dependency); with no token, `logfire.configure(send_to_logfire=False)`
+is used so log calls stay silent no-ops rather than warning on every line.
+
 ## 2026-08-12 — Split `main` (README-only) from `mia` (active development)
 
 **Why:** Keep the repo's default branch minimal/presentable; all spec docs
