@@ -50,13 +50,31 @@ rejected WebSocket connection: HTTP 401` rather than the SDK's intended
 `InvalidStatusCode` class, which is not what websockets 16.x actually
 raises). The error is still clear and mentions the 401 status, so this
 wrapper does not attempt to paper over it.
+
+Liveness: Deepgram closes an idle live connection server-side, and the main
+loop deliberately stops sending audio for the length of a voice turn (the
+self-echo gate). `send_keepalive_if_idle()` therefore puts a KeepAlive on the
+wire during those gaps, and CLOSE/ERROR handlers plus try/except around every
+socket call make a dead connection visible and non-fatal instead of an
+exception that unwinds the call loop and ejects the bot from the meeting.
 """
 
 import threading
+import time
 from collections.abc import Callable
 
 from deepgram import DeepgramClient
 from deepgram.core.events import EventType
+
+from mia.logging_setup import safe_log
+
+# Deepgram closes a live connection that has received no audio for ~10s. The
+# main loop stops sending frames for the whole of a voice turn (wake word ->
+# Claude -> TTS playback -> cooldown, roughly 7-12s), which is long enough to
+# be dropped mid-turn, so a KeepAlive goes out whenever the stream has been
+# idle for this long. Half the server-side timeout leaves room for a slow
+# iteration.
+_KEEPALIVE_IDLE_SECONDS = 5.0
 
 
 class StreamingSTT:
@@ -66,6 +84,12 @@ class StreamingSTT:
         self._connect_cm = None
         self._connection = None
         self._listen_thread = None
+        # Set by the CLOSE/ERROR handlers below, or by a failed send. Without
+        # it a server-side close is invisible: the next send_media() raises,
+        # the exception unwinds the call loop, and the bot leaves the meeting
+        # after answering exactly one command.
+        self._connected = False
+        self._last_send = 0.0
 
     def start(self) -> None:
         self._connect_cm = self._client.listen.v1.connect(
@@ -88,7 +112,20 @@ class StreamingSTT:
             if transcript:
                 self._on_transcript(transcript, bool(message.is_final))
 
+        def _handle_close(_event) -> None:
+            self._connected = False
+            safe_log("warning", "deepgram connection closed")
+
+        def _handle_error(event) -> None:
+            self._connected = False
+            safe_log("error", "deepgram connection error", error=str(event))
+
         self._connection.on(EventType.MESSAGE, _handle_message)
+        self._connection.on(EventType.CLOSE, _handle_close)
+        self._connection.on(EventType.ERROR, _handle_error)
+
+        self._connected = True
+        self._last_send = time.monotonic()
 
         # start_listening() blocks the calling thread until the socket
         # closes, dispatching to the callback registered above as messages
@@ -99,17 +136,56 @@ class StreamingSTT:
         )
         self._listen_thread.start()
 
+    def is_connected(self) -> bool:
+        return self._connected and self._connection is not None
+
     def send_frame(self, frame: bytes) -> None:
-        if self._connection is not None:
+        if not self.is_connected():
+            return
+        try:
             self._connection.send_media(frame)
+            self._last_send = time.monotonic()
+        except Exception as exc:
+            # A raise here means the socket is gone. Swallow it: an audio
+            # frame failing to reach Deepgram must not tear down the meeting.
+            self._connected = False
+            safe_log("error", "deepgram frame send failed", error=str(exc))
+
+    def send_keepalive_if_idle(self) -> None:
+        """Keep the socket alive while no audio is being sent.
+
+        The caller invokes this every loop iteration regardless of whether the
+        turn-state gate lets real frames through; it only puts a KeepAlive on
+        the wire once the stream has actually been idle.
+        """
+        if not self.is_connected():
+            return
+        now = time.monotonic()
+        if now - self._last_send < _KEEPALIVE_IDLE_SECONDS:
+            return
+        try:
+            self._connection.send_keep_alive()
+            self._last_send = now
+        except Exception as exc:
+            self._connected = False
+            safe_log("error", "deepgram keepalive failed", error=str(exc))
 
     def stop(self) -> None:
+        self._connected = False
         if self._connection is not None:
-            self._connection.send_close_stream()
+            try:
+                self._connection.send_close_stream()
+            except Exception as exc:
+                # Already-dead socket; the context manager below still needs
+                # to run, so teardown must not raise past this point.
+                safe_log("warning", "deepgram close-stream failed", error=str(exc))
             self._connection = None
         if self._listen_thread is not None:
             self._listen_thread.join(timeout=5)
             self._listen_thread = None
         if self._connect_cm is not None:
-            self._connect_cm.__exit__(None, None, None)
+            try:
+                self._connect_cm.__exit__(None, None, None)
+            except Exception as exc:
+                safe_log("warning", "deepgram disconnect failed", error=str(exc))
             self._connect_cm = None

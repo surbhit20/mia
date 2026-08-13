@@ -191,6 +191,12 @@ def _run_call_loop(
                 if turn_state.should_process_stt():
                     stt.send_frame(frame)
 
+                # Called every iteration, gated or not: during a voice turn no
+                # frames are sent at all (self-echo gating), and Deepgram drops
+                # a silent connection after ~10s. This is a no-op while real
+                # audio is flowing.
+                stt.send_keepalive_if_idle()
+
                 is_speech = vad.is_speech(frame)
 
                 command_text = None
