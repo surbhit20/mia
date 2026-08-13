@@ -34,12 +34,23 @@ notification sounds while `mia` is running.
 
 ## 2. Bot account login and device selection (one time, in Chromium)
 
-1. Run `python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('~/.mia/chrome-profile', headless=False, channel='chrome'); input('press enter when done'); b.close()"`.
+1. Run `python3 -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('$HOME/.mia/chrome-profile', headless=False, channel='chrome'); input('press enter when done'); b.close()"`.
    (`channel='chrome'` uses your real, locally-installed Google Chrome
    instead of Playwright's bundled Chromium — Google's sign-in flow
    detects and blocks the bundled one outright. Requires Google Chrome to
-   already be installed.)
-2. Log into the bot's dedicated Google account.
+   already be installed. Use `$HOME`, not `~` — `~` is not expanded inside
+   this quoted string and will silently create the profile in the wrong
+   place.)
+2. **Do not sign in from this automated window** — Google also blocks
+   sign-in for any Chrome instance launched with extra command-line flags
+   (including a plain `--user-data-dir`), automation or not. Instead: open
+   Chrome normally (double-click the app, no terminal), use its native
+   **profile switcher → Add Chrome Profile** to create and sign into a
+   separate profile as the bot account, and do the Meet call / device
+   selection (step 3 below) in *that* window. Then quit Chrome and copy
+   that profile's data into `~/.mia/chrome-profile` before running the
+   command above again (which will now just reuse the already-signed-in
+   session instead of hitting the sign-in flow at all).
 3. Join any Meet call, open in-call device settings, and select
    **BlackHole 2ch** as both the microphone and speaker.
 4. Press enter in the terminal to close — this profile is reused on every

@@ -12,6 +12,33 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-13 — `SETUP.md`'s login command must use `$HOME`, not `~`, and must not sign in from Playwright at all
+
+**Why:** Two real bugs found during live manual setup, on top of the
+`channel="chrome"` fix above:
+1. `~/.mia/chrome-profile` passed as a literal string to
+   `launch_persistent_context` is never expanded (Playwright doesn't do
+   `~`-expansion, and it's inside quotes so the shell doesn't either) — it
+   silently resolves relative to the current working directory instead,
+   creating a bogus nested profile (observed: a literal folder named `~`
+   inside the project directory) rather than erroring. `SETUP.md`'s command
+   now uses `$HOME` inside the double-quoted `-c` string, which the shell
+   does expand.
+2. `channel="chrome"` alone doesn't avoid Google's sign-in block: Google
+   also flags *any* Chrome instance launched with extra command-line flags
+   (a bare `--user-data-dir` included), independent of whether real CDP
+   automation is involved. A completely unautomated `open -a "Google
+   Chrome" --args --user-data-dir=...` hit the identical "Couldn't sign you
+   in ... browser or app may not be secure" error. `SETUP.md` now instructs
+   doing the login through Chrome's native profile switcher (Add Chrome
+   Profile), with zero command-line flags, then copying that profile's data
+   into `~/.mia/chrome-profile` afterward — Playwright only ever opens an
+   *already-authenticated* profile, never triggers the sign-in flow itself.
+**How to apply:** if a future setup step needs a fresh authenticated Google
+session, assume any non-default browser launch flag risks this same block;
+prefer creating/signing in via the browser's own UI and handing automation
+an already-authenticated profile afterward.
+
 ## 2026-08-13 — JoinWorker uses real Chrome (`channel="chrome"`), not bundled Chromium
 
 **Why:** Discovered during live manual setup — Google's sign-in flow actively
