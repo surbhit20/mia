@@ -12,6 +12,31 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-12 — Final-review fix pass: wake word, dedup TTL, frame size
+
+**Why:** Whole-branch review surfaced choices the per-task reviews couldn't
+see. Three of the fixes had real alternatives:
+- **Wake word `hey mia`, not `hey bot`.** "hey bot" fuzzy-matched ordinary
+  meeting speech ("the bottom line", "they both agreed") 4/20 times at the
+  shipped threshold; "hey mia" scored 0/20 with every true positive still
+  matching. Raising the threshold instead was rejected — "they both" scores
+  100.0, so no threshold separates it.
+- **State entries expire after 4 hours** instead of never. Meet URLs are
+  stable across a recurring event, so a permanent "skipped" blacklisted
+  tomorrow's standup. Four hours outlives any single meeting (no call can
+  re-prompt itself mid-session) and clears well before the next day.
+  Alternative considered: expiring only "skipped"/"prompted" — rejected, a
+  stale "joined" from a crashed run is the same trap.
+- **32ms audio frames, not the spec's 30ms.** silero-vad's window is exactly
+  512 samples at 16kHz; 30ms is 480 and was zero-padded on every inference.
+  `FrameVAD` now rejects a mismatched `frame_ms` rather than silently
+  padding, and the end-of-command silence run was retuned (24 frames) to
+  keep the same ~768ms window.
+
+**Also:** `LOGFIRE_TOKEN` became optional (the spec requires Logfire never
+be a hard dependency); with no token, `logfire.configure(send_to_logfire=False)`
+is used so log calls stay silent no-ops rather than warning on every line.
+
 ## 2026-08-12 — Split `main` (README-only) from `mia` (active development)
 
 **Why:** Keep the repo's default branch minimal/presentable; all spec docs
