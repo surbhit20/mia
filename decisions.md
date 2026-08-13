@@ -12,6 +12,26 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-13 — JoinWorker uses real Chrome (`channel="chrome"`), not bundled Chromium
+
+**Why:** Discovered during live manual setup — Google's sign-in flow actively
+detects Playwright's bundled Chromium (via `navigator.webdriver` and other
+automation fingerprints) and refuses login outright ("Couldn't sign you in
+... This browser or app may not be secure"), even for a real human typing a
+real password. Real, locally-installed Google Chrome doesn't carry the same
+default automation signature. Since the one-time manual login (`SETUP.md`
+step 2) and the bot's later automated joins (`JoinWorker.join`) both need to
+work against the same persistent profile, both now use `channel="chrome"`
+for consistency — logging in with one browser binary and joining with
+another would risk profile/session incompatibilities beyond just the
+detection risk.
+**Requires:** real Google Chrome installed on the machine running `mia`
+(separate from the Playwright-managed Chromium installed via
+`playwright install chromium`, which is no longer what `JoinWorker` uses).
+**Alternatives considered:** stealth/anti-detection patches for bundled
+Chromium — more fragile, actively fought by Google, not worth the
+maintenance burden for a one-line fix.
+
 ## 2026-08-12 — Accepted: Deepgram keepalive can't fire during a blocking voice turn
 
 **Why:** The final whole-branch review's fix for "no keepalive, dead socket

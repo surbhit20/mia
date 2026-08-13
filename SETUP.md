@@ -34,7 +34,11 @@ notification sounds while `mia` is running.
 
 ## 2. Bot account login and device selection (one time, in Chromium)
 
-1. Run `python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('~/.mia/chrome-profile', headless=False); input('press enter when done'); b.close()"`.
+1. Run `python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('~/.mia/chrome-profile', headless=False, channel='chrome'); input('press enter when done'); b.close()"`.
+   (`channel='chrome'` uses your real, locally-installed Google Chrome
+   instead of Playwright's bundled Chromium — Google's sign-in flow
+   detects and blocks the bundled one outright. Requires Google Chrome to
+   already be installed.)
 2. Log into the bot's dedicated Google account.
 3. Join any Meet call, open in-call device settings, and select
    **BlackHole 2ch** as both the microphone and speaker.
