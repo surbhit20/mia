@@ -48,9 +48,11 @@ _SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 # Outer detection poll interval.
 _POLL_INTERVAL_SECONDS = 5.0
 
-# Audio framing for the live loop. 30ms matches the spec's "~20-30ms frames"
-# and FrameVAD's own default.
-_FRAME_MS = 30
+# Audio framing for the live loop. 32ms x 16kHz is exactly the 512-sample
+# window silero-vad requires, so every frame reaches the model intact; the
+# 30ms the spec suggests would be 480 samples and get zero-padded on every
+# single inference for the life of the process.
+_FRAME_MS = 32
 
 # NOTE: the draft re-ran the AppleScript tab scan on *every* audio frame
 # (~33 subprocess spawns/second), which would starve the real-time audio loop.
@@ -67,9 +69,9 @@ _LEAVE_CONFIRM_CHECKS = 2
 # CommandBuffer.on_silence() stops capturing even when it returns None, so a
 # single silent frame right after the wake word would abandon the command
 # entirely. Require a run of consecutive non-speech frames instead
-# (25 * 30ms = 750ms, sub-second per the spec's turn-taking requirement, and
+# (24 * 32ms = 768ms, sub-second per the spec's turn-taking requirement, and
 # long enough to survive a natural pause after the wake phrase).
-_SILENCE_FRAMES_TO_END_COMMAND = 25
+_SILENCE_FRAMES_TO_END_COMMAND = 24
 
 
 def _save_credentials(creds: Credentials) -> None:

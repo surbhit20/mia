@@ -8,20 +8,31 @@ from silero_vad import load_silero_vad
 # This is stricter than the brief's original code, which fed the model whatever
 # length `frame_ms` produced (e.g. 480 samples for a 30ms frame at 16kHz) and
 # raised "Input audio chunk is too short" / a shape-mismatch ValueError at
-# runtime. To keep the public interface's frame_ms=30 default intact (Task 19's
-# main loop depends on that framing), is_speech() pads/truncates each incoming
-# frame to the model's required window size before inference.
+# runtime.
+#
+# `frame_ms` therefore isn't free: it must be the duration that yields exactly
+# this window (32ms at 16kHz, 32ms at 8kHz), and __init__ rejects anything else
+# rather than silently degrading every inference. is_speech() still pads or
+# truncates as a last-resort guard for a short/partial read from the device.
 _WINDOW_SAMPLES = {8000: 256, 16000: 512}
 
 
 class FrameVAD:
-    def __init__(self, sample_rate: int = 16000, frame_ms: int = 30):
+    def __init__(self, sample_rate: int = 16000, frame_ms: int = 32):
         if sample_rate not in _WINDOW_SAMPLES:
             raise ValueError(f"Unsupported sample_rate {sample_rate}; silero-vad supports 8000 or 16000")
+        window_samples = _WINDOW_SAMPLES[sample_rate]
+        frame_samples = int(sample_rate * frame_ms / 1000)
+        if frame_samples != window_samples:
+            raise ValueError(
+                f"frame_ms={frame_ms} at {sample_rate}Hz is {frame_samples} samples, "
+                f"but silero-vad requires exactly {window_samples}; "
+                f"use frame_ms={int(window_samples * 1000 / sample_rate)}"
+            )
         self._model = load_silero_vad()
         self._sample_rate = sample_rate
         self._frame_ms = frame_ms
-        self._window_samples = _WINDOW_SAMPLES[sample_rate]
+        self._window_samples = window_samples
 
     def is_speech(self, frame: bytes) -> bool:
         audio = np.frombuffer(frame, dtype="int16").astype("float32") / 32768.0
