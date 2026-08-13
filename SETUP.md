@@ -3,6 +3,20 @@
 Run `./setup_audio.sh` first, then complete these manual steps — none of
 this can be scripted.
 
+## 0. Install `mia`
+
+```sh
+pip install -e ".[dev]"     # runtime + test dependencies
+playwright install chromium # the browser JoinWorker drives
+cp .env.example .env        # then fill in your keys (see step 5)
+```
+
+`mia` runs as a long-lived foreground process:
+
+```sh
+python -m mia.main
+```
+
 ## 1. Audio MIDI Setup routing
 
 1. Open **Audio MIDI Setup** (Spotlight search).
@@ -37,5 +51,27 @@ Automation. Click **OK**. If missed, grant it manually under
 ## 4. Google Calendar OAuth
 
 Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env` (from a Google
-Cloud project with the Calendar API enabled), then run `mia`'s OAuth flow
-once (wired up in Task 19) to store a refresh token locally.
+Cloud project with the Calendar API enabled), then start `mia`
+(`python -m mia.main`) once: it opens the OAuth consent flow in a browser
+and stores the resulting refresh token at `~/.mia/token.json`.
+
+## 5. Environment variables
+
+`python -m mia.main` loads `.env` from the working directory at startup
+(real exported environment variables take precedence).
+
+Required — the process refuses to start without them:
+
+- `DEEPGRAM_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `ELEVENLABS_API_KEY`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+
+Optional:
+
+- `LOGFIRE_TOKEN` — enables Logfire reporting. Leave it unset and `mia`
+  runs normally with reporting disabled; Logfire is never required for
+  correctness.
+- `WAKE_WORD` — defaults to `hey mia`.
+- `FUZZY_THRESHOLD` — wake-word match threshold, defaults to `0.75`.

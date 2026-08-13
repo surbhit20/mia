@@ -8,6 +8,13 @@ _LEVEL_NAMES = {"info": "info", "warning": "warn", "error": "error"}
 
 
 def configure(config: Config) -> None:
+    if not config.logfire_token:
+        # Logfire is never a hard dependency (spec). With no token, configure
+        # it in local-only mode: safe_log() calls stay harmless no-ops instead
+        # of emitting a "not configured" warning on every single log line.
+        logfire.configure(send_to_logfire=False)
+        print("mia: no LOGFIRE_TOKEN set; Logfire reporting disabled", file=sys.stderr)
+        return
     logfire.configure(token=config.logfire_token)
 
 

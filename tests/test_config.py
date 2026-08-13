@@ -23,6 +23,16 @@ def test_from_env_reads_all_required_keys(monkeypatch):
     assert config.wake_word == "hey mia"
     assert config.fuzzy_threshold == 0.75
 
+def test_from_env_does_not_require_logfire_token(monkeypatch):
+    # Spec: Logfire must never be a hard dependency for correctness, so a user
+    # with no Logfire account can still start the bot.
+    for k, v in REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("LOGFIRE_TOKEN")
+    config = Config.from_env()
+    assert config.logfire_token == ""
+    assert config.deepgram_api_key == "dg-key"
+
 def test_from_env_raises_on_missing_key(monkeypatch):
     for k, v in REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)

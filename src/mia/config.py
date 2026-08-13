@@ -7,13 +7,15 @@ class MissingConfigError(ValueError):
         super().__init__(f"missing required environment variable: {key}")
         self.key = key
 
+# LOGFIRE_TOKEN is deliberately absent: the spec requires that Logfire never be
+# a hard dependency for correctness, so a user with no Logfire account can
+# still start the bot (logging_setup just skips configuring it).
 _REQUIRED_KEYS = (
     "DEEPGRAM_API_KEY",
     "ANTHROPIC_API_KEY",
     "ELEVENLABS_API_KEY",
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
-    "LOGFIRE_TOKEN",
 )
 
 @dataclass(frozen=True)
@@ -23,7 +25,7 @@ class Config:
     elevenlabs_api_key: str
     google_client_id: str
     google_client_secret: str
-    logfire_token: str
+    logfire_token: str = ""
     wake_word: str = "hey mia"
     fuzzy_threshold: float = 0.75
     state_file: Path = field(default_factory=lambda: Path("~/.mia/state.json").expanduser())
@@ -42,7 +44,7 @@ class Config:
             elevenlabs_api_key=values["ELEVENLABS_API_KEY"],
             google_client_id=values["GOOGLE_CLIENT_ID"],
             google_client_secret=values["GOOGLE_CLIENT_SECRET"],
-            logfire_token=values["LOGFIRE_TOKEN"],
+            logfire_token=os.environ.get("LOGFIRE_TOKEN", ""),
             wake_word=os.environ.get("WAKE_WORD", "hey mia"),
             fuzzy_threshold=float(os.environ.get("FUZZY_THRESHOLD", "0.75")),
         )

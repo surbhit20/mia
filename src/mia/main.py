@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from anthropic import Anthropic
+from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -321,6 +322,15 @@ def _handle_join(
 
 
 def run() -> None:
+    # SETUP.md tells the user to put their credentials in `.env`, and
+    # Config.from_env() only reads os.environ -- so something has to bridge
+    # the two. Done here rather than in config.py so importing Config never
+    # has the side effect of loading files (which would also make the config
+    # tests depend on whatever .env happens to sit in the working directory).
+    # load_dotenv() does not override variables already set in the real
+    # environment, so an exported value still wins.
+    load_dotenv()
+
     config = Config.from_env()
     configure_logging(config)
 
