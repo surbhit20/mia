@@ -5,8 +5,10 @@ against deepgram-sdk's older ("v3-style") API: `DeepgramClient(api_key)`,
 `client.listen.live.v("1")`, `LiveOptions`, `LiveTranscriptionEvents`, and a
 connection object with `.on()` / `.start()` / `.send()` / `.finish()`.
 
-The actually installed package is deepgram-sdk 7.7.0 (pyproject.toml only
-pins `>=3.0`), which replaced that surface entirely:
+The actually installed package is deepgram-sdk 7.7.0 (pyproject.toml
+originally pinned only `>=3.0`; tightened to `>=7.0` alongside this file,
+since the code below targets the v7 `connect()`-based API), which replaced
+that surface entirely:
 
 - `DeepgramClient(api_key)` (positional) now raises a TypeError -- the
   underlying `BaseClient` only accepts keyword args, so the key must be
