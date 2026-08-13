@@ -32,6 +32,16 @@ def test_does_not_reprompt_already_prompted_meeting(tmp_path):
     result = decide(mic_active=True, meet_tab_url=URL, calendar_title="Standup", state=state)
     assert result.should_prompt is False
 
+def test_reprompts_once_a_skipped_meeting_has_expired(tmp_path):
+    # A recurring meeting reuses its Meet URL, so "skipped" must not blacklist
+    # the link forever -- only for the dedup window.
+    now = [1000.0]
+    state = StateStore(tmp_path / "state.json", ttl_seconds=60, clock=lambda: now[0])
+    state.set_status(URL, "skipped")
+    assert decide(mic_active=True, meet_tab_url=URL, calendar_title=None, state=state).should_prompt is False
+    now[0] += 61
+    assert decide(mic_active=True, meet_tab_url=URL, calendar_title=None, state=state).should_prompt is True
+
 def test_does_not_reprompt_joined_or_skipped_meeting(tmp_path):
     state = StateStore(tmp_path / "state.json")
     state.set_status(URL, "joined")
