@@ -12,6 +12,56 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-13 — Live test result: Attendee's anonymous Google Meet join does NOT work (contradicts docs)
+
+**Why this matters:** The previous entry's pivot decision rested on Attendee's
+documented claim that signed-in bot login is optional for Google Meet, with
+anonymous guest join as the default. Self-hosted Attendee was deployed
+locally (Docker Compose, see below for the deployment issues hit along the
+way) and tested against two real, live Google Meet calls:
+1. An instant meeting started ad-hoc from a personal account.
+2. A calendar-scheduled meeting (with a Google Meet link generated via
+   Calendar → Add Google Meet video conferencing), joined as a human host
+   *before* dispatching the bot, specifically to test whether host presence
+   changed the outcome.
+Both attempts failed identically: `state: "fatal_error"`, event
+`could_not_join_meeting`, `sub_type: "login_required"`. Worker logs showed
+the bot's browser navigated to `accounts.google.com` — the same sign-in wall
+fought manually all afternoon with our own Playwright approach. Ruling out
+both "instant vs. scheduled meeting" and "host absent vs. present" as the
+variable means this looks like a general, unconditional requirement: Google
+now appears to require sign-in for any Meet join attempt from an automated
+browser, contradicting Attendee's own documentation (which may be stale, or
+may describe behavior that applied before Google tightened this).
+**Status:** open — next step is deciding whether to pursue signed-in bots
+(requires a paid Google Workspace account on a custom domain, per the
+earlier entry) or reconsider the approach again. Not yet decided.
+
+## 2026-08-13 — Attendee local deployment: two Docker issues fixed along the way
+
+1. **OOM during parallel build** (exit 137) on an 8GB-RAM Apple Silicon Mac:
+   `docker compose build` builds all three services (app/worker/scheduler)
+   in parallel by default; since they share one Dockerfile, building only
+   `attendee-app-local` first (then letting the other two hit cache) avoided
+   the memory spike instead of raising Docker's memory allocation (risky
+   with only 8GB total system RAM).
+2. **`OSError: [Errno 35] Resource deadlock avoided`** on Python imports
+   from the bind-mounted source directory (`volumes: - .:/attendee` in
+   `dev.docker-compose.yaml`), even with VirtioFS already enabled — likely
+   concurrent/forked-process file reads racing under `amd64` emulation on
+   Apple Silicon. Fixed by removing the bind mount entirely for
+   `attendee-app-local`/`-worker-local`/`-scheduler-local` (we're running
+   Attendee as infrastructure, not developing its codebase, so we don't
+   need live code reload — the image's baked-in `COPY` from build time is
+   sufficient). This had a side effect: removing the bind mount also
+   removed the container's only way to see `.env` (Django loads it via
+   `load_dotenv()` + `os.getenv()` from the working directory), which
+   surfaced as `CREDENTIALS_ENCRYPTION_KEY` migration failing with `None`.
+   Fixed by adding `env_file: .env` to each of the three services instead —
+   confirmed safe since Django reads via `os.getenv()`, which `env_file`
+   populates directly without needing a physical `.env` file in the
+   container.
+
 ## 2026-08-13 — Pivot: replace Playwright JoinWorker with self-hosted Attendee.dev; no bot-account login needed for joining
 
 **Why:** After an entire afternoon fighting Google's automation-detection
