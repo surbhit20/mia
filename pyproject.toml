@@ -13,6 +13,7 @@ dependencies = [
     "pyobjc-framework-CoreAudio>=10.3; sys_platform == 'darwin'",
     "silero-vad>=5.1",
     "logfire>=1.0",
+    "sounddevice>=0.5",
 ]
 
 [project.optional-dependencies]
