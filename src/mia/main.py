@@ -335,62 +335,81 @@ def run() -> None:
     was_mic_only = False
     try:
         while True:
-            mic_active = is_mic_active()
+            # This is a long-running background process: one bad poll (a
+            # disconnected USB mic raising from is_mic_active(), an
+            # unreadable state file, a Calendar API hiccup) must cost that
+            # iteration, not the whole run. KeyboardInterrupt is a
+            # BaseException, so the clean-exit path below still wins.
+            try:
+                mic_active = is_mic_active()
 
-            # NOTE (bug fix): the draft called find_active_meet_tab() twice per
-            # iteration -- once for the meet_tab_url argument and once for the
-            # walrus in the calendar_title argument. Each call spawns an
-            # osascript subprocess, and the two could observe different tab
-            # state. Scan once and reuse.
-            meet_url = find_active_meet_tab()
+                # NOTE (bug fix): the draft called find_active_meet_tab() twice
+                # per iteration -- once for the meet_tab_url argument and once
+                # for the walrus in the calendar_title argument. Each call
+                # spawns an osascript subprocess, and the two could observe
+                # different tab state. Scan once and reuse.
+                meet_url = find_active_meet_tab()
 
-            # Spec: trigger events that don't become meetings are still logged,
-            # but the outer loop polls every few seconds, so log the mic-active-
-            # without-a-Meet-tab case only on the transition into it.
-            mic_only = mic_active and meet_url is None
-            if mic_only and not was_mic_only:
-                safe_log("info", "mic active with no meet tab")
-            was_mic_only = mic_only
+                # Spec: trigger events that don't become meetings are still
+                # logged, but the outer loop polls every few seconds, so log the
+                # mic-active-without-a-Meet-tab case only on the transition
+                # into it.
+                mic_only = mic_active and meet_url is None
+                if mic_only and not was_mic_only:
+                    safe_log("info", "mic active with no meet tab")
+                was_mic_only = mic_only
 
-            # Only spend a Calendar API call when this poll could actually
-            # produce a prompt. Any status already recorded for this URL means
-            # decide() will refuse to prompt regardless of the title, and the
-            # enricher's result would be thrown away -- which, for a call the
-            # user skipped, would otherwise be one wasted API call every poll
-            # for the meeting's whole duration.
-            calendar_title = None
-            if mic_active and meet_url is not None and state.status(meet_url) is None:
-                calendar_title = find_current_meeting_title(
-                    calendar_service,
-                    now=datetime.now(timezone.utc),
-                    meet_url=meet_url,
+                # Only spend a Calendar API call when this poll could actually
+                # produce a prompt. Any status already recorded for this URL
+                # means decide() will refuse to prompt regardless of the title,
+                # and the enricher's result would be thrown away -- which, for a
+                # call the user skipped, would otherwise be one wasted API call
+                # every poll for the meeting's whole duration.
+                calendar_title = None
+                if (
+                    mic_active
+                    and meet_url is not None
+                    and state.status(meet_url) is None
+                ):
+                    calendar_title = find_current_meeting_title(
+                        calendar_service,
+                        now=datetime.now(timezone.utc),
+                        meet_url=meet_url,
+                    )
+
+                decision = decide(
+                    mic_active=mic_active,
+                    meet_tab_url=meet_url,
+                    calendar_title=calendar_title,
+                    state=state,
                 )
 
-            decision = decide(
-                mic_active=mic_active,
-                meet_tab_url=meet_url,
-                calendar_title=calendar_title,
-                state=state,
-            )
-
-            if decision.should_prompt:
-                state.set_status(decision.meeting_url, "prompted")
-                safe_log("info", "prompting to join", meeting_url=decision.meeting_url)
-                result = _prompt_join_safely(decision.display_title)
-
-                if result == NotificationResult.JOIN:
-                    state.set_status(decision.meeting_url, "joined")
-                    _handle_join(
-                        config, registry, anthropic_client, state, decision.meeting_url
-                    )
-                else:
+                if decision.should_prompt:
+                    state.set_status(decision.meeting_url, "prompted")
                     safe_log(
-                        "info",
-                        "join prompt not accepted",
-                        meeting_url=decision.meeting_url,
-                        result=str(result),
+                        "info", "prompting to join", meeting_url=decision.meeting_url
                     )
-                    state.set_status(decision.meeting_url, "skipped")
+                    result = _prompt_join_safely(decision.display_title)
+
+                    if result == NotificationResult.JOIN:
+                        state.set_status(decision.meeting_url, "joined")
+                        _handle_join(
+                            config,
+                            registry,
+                            anthropic_client,
+                            state,
+                            decision.meeting_url,
+                        )
+                    else:
+                        safe_log(
+                            "info",
+                            "join prompt not accepted",
+                            meeting_url=decision.meeting_url,
+                            result=str(result),
+                        )
+                        state.set_status(decision.meeting_url, "skipped")
+            except Exception as exc:
+                safe_log("error", "detection poll failed", error=str(exc))
 
             time.sleep(_POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:
