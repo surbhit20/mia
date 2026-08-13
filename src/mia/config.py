@@ -24,7 +24,7 @@ class Config:
     google_client_id: str
     google_client_secret: str
     logfire_token: str
-    wake_word: str = "hey bot"
+    wake_word: str = "hey mia"
     fuzzy_threshold: float = 0.75
     state_file: Path = field(default_factory=lambda: Path("~/.mia/state.json").expanduser())
 
@@ -43,6 +43,6 @@ class Config:
             google_client_id=values["GOOGLE_CLIENT_ID"],
             google_client_secret=values["GOOGLE_CLIENT_SECRET"],
             logfire_token=values["LOGFIRE_TOKEN"],
-            wake_word=os.environ.get("WAKE_WORD", "hey bot"),
+            wake_word=os.environ.get("WAKE_WORD", "hey mia"),
             fuzzy_threshold=float(os.environ.get("FUZZY_THRESHOLD", "0.75")),
         )

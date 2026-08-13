@@ -239,8 +239,25 @@ def _run_call_loop(
                         tool=result.tool_name,
                         meeting_url=meet_url,
                     )
-                    audio = synthesize(config.elevenlabs_api_key, result.confirmation)
-                    inject_into_virtual_mic(audio)
+                    # Spec: a false trigger must stay silent. If no tool matched
+                    # *and* nothing was said beyond the wake phrase itself, the
+                    # wake word fired on stray speech -- speaking "sorry, I
+                    # didn't catch that" into a live meeting would be the bug.
+                    # A genuine unrecognized command (words after the wake
+                    # phrase) still gets the spoken fallback.
+                    if result.tool_name is None and not wake_word.strip_wake_phrase(
+                        command_text
+                    ):
+                        safe_log(
+                            "info",
+                            "bare wake phrase ignored",
+                            meeting_url=meet_url,
+                        )
+                    else:
+                        audio = synthesize(
+                            config.elevenlabs_api_key, result.confirmation
+                        )
+                        inject_into_virtual_mic(audio)
                 except Exception as exc:
                     safe_log(
                         "error",

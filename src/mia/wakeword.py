@@ -22,3 +22,18 @@ class WakeWordMatcher:
             if fuzz.partial_ratio(window, self._wake_word) >= self._threshold_pct:
                 return True
         return False
+
+    def strip_wake_phrase(self, text: str) -> str:
+        """`text`, normalized, with the first matching wake-word window removed.
+
+        Lets the caller tell a bare trigger ("hey mia" and nothing else, or a
+        near-miss on background speech) from a real command Claude simply
+        couldn't act on: only the former should be answered with silence.
+        Returns the normalized text unchanged when no window matches.
+        """
+        words = _normalize(text).split()
+        for i in range(max(len(words) - self._window_size + 1, 1)):
+            window = " ".join(words[i : i + self._window_size])
+            if fuzz.partial_ratio(window, self._wake_word) >= self._threshold_pct:
+                return " ".join(words[:i] + words[i + self._window_size :])
+        return " ".join(words)

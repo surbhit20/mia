@@ -20,7 +20,7 @@ def test_from_env_reads_all_required_keys(monkeypatch):
     assert config.google_client_id == "gc-id"
     assert config.google_client_secret == "gc-secret"
     assert config.logfire_token == "lf-token"
-    assert config.wake_word == "hey bot"
+    assert config.wake_word == "hey mia"
     assert config.fuzzy_threshold == 0.75
 
 def test_from_env_raises_on_missing_key(monkeypatch):
@@ -33,5 +33,5 @@ def test_from_env_raises_on_missing_key(monkeypatch):
 def test_from_env_respects_wake_word_override(monkeypatch):
     for k, v in REQUIRED_ENV.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.setenv("WAKE_WORD", "hey mia")
-    assert Config.from_env().wake_word == "hey mia"
+    monkeypatch.setenv("WAKE_WORD", "hey robot")
+    assert Config.from_env().wake_word == "hey robot"
