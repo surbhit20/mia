@@ -1,6 +1,8 @@
+from datetime import datetime
 from unittest.mock import MagicMock
 
 from mia.llm import dispatch_command
+from mia.timeutil import local_timezone_label
 from mia.tools.base import Tool, ToolRegistry
 
 def _mock_tool_use_response(tool_name, tool_input):
@@ -38,6 +40,11 @@ def test_dispatches_to_matching_tool():
     assert result.confirmation == "blocked Focus time"
     _, kwargs = client.messages.create.call_args
     assert kwargs["tools"] == registry.anthropic_tool_specs()
+    # Claude must be told the real current date/time, or it resolves "3 PM"
+    # against its training cutoff and books the wrong day.
+    today = datetime.now().astimezone().date().isoformat()
+    assert today in kwargs["system"]
+    assert local_timezone_label() in kwargs["system"]
 
 def test_no_tool_use_returns_fallback():
     registry = ToolRegistry()

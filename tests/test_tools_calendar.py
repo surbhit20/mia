@@ -1,5 +1,7 @@
+from datetime import datetime
 from unittest.mock import MagicMock
 
+from mia.timeutil import local_iana_timezone
 from mia.tools.calendar_tool import build_calendar_tool
 
 def test_tool_metadata():
@@ -27,6 +29,27 @@ def test_handler_creates_event_and_confirms():
     assert kwargs["body"]["end"]["dateTime"] == "2026-08-12T15:30:00-07:00"
     assert "Focus time" in result
     assert "30 minutes" in result
+    # A timeZone is sent whenever the local IANA zone is resolvable; when it
+    # isn't, the offset already carried by dateTime stands alone.
+    zone = local_iana_timezone()
+    if zone is not None:
+        assert kwargs["body"]["start"]["timeZone"] == zone
+        assert kwargs["body"]["end"]["timeZone"] == zone
+
+
+def test_handler_never_sends_a_naive_datetime():
+    service = MagicMock()
+    tool = build_calendar_tool(service)
+    tool.handler({
+        "start_iso": "2026-08-12T15:00:00",  # no offset
+        "duration_minutes": 30,
+        "title": "Focus time",
+    })
+
+    _, kwargs = service.events.return_value.insert.call_args
+    for field in ("start", "end"):
+        parsed = datetime.fromisoformat(kwargs["body"][field]["dateTime"])
+        assert parsed.tzinfo is not None
 
 def test_handler_surfaces_api_error_as_exception():
     service = MagicMock()

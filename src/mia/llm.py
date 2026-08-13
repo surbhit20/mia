@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from datetime import datetime
 
+from mia.timeutil import local_timezone_label
 from mia.tools.base import ToolRegistry
 
 @dataclass(frozen=True)
@@ -7,10 +9,29 @@ class ToolCallResult:
     tool_name: str | None
     confirmation: str
 
+def _system_prompt() -> str:
+    """Ground Claude in the real current date/time.
+
+    Without this the model has no idea what "today" is, so "block 3 PM" would
+    be resolved against its training cutoff -- silently creating the event on
+    the wrong day (or emitting a naive timestamp the Calendar API rejects).
+    """
+    now = datetime.now().astimezone()
+    return (
+        "You are a voice assistant taking spoken commands during a live meeting.\n"
+        f"The current date and time is {now.isoformat()}.\n"
+        f"The user's local timezone is {local_timezone_label()}.\n"
+        "Use that as the reference point for every relative or bare time the "
+        "user gives (\"3 PM\", \"tomorrow\", \"in an hour\"): interpret them in "
+        "the user's local timezone, and always emit ISO 8601 datetimes that "
+        "include the UTC offset -- never a timezone-naive timestamp."
+    )
+
 def dispatch_command(client, registry: ToolRegistry, command_text: str) -> ToolCallResult:
     response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=256,
+        system=_system_prompt(),
         tools=registry.anthropic_tool_specs(),
         messages=[{"role": "user", "content": command_text}],
     )
