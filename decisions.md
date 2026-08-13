@@ -12,6 +12,27 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-12 — Accepted: Deepgram keepalive can't fire during a blocking voice turn
+
+**Why:** The final whole-branch review's fix for "no keepalive, dead socket
+ejects the bot" (`stt.py`'s `send_keepalive_if_idle()`) is driven from the
+same loop thread that blocks synchronously through `dispatch_command`
+(Claude), `synthesize` (ElevenLabs), and `inject_into_virtual_mic` (blocking
+playback) — so for a voice turn lasting the full 7-12s the original finding
+described, the keepalive is structurally unable to fire until *after* that
+window, not during it. The re-review caught this; it's a narrower, already-
+acknowledged residual (no reconnect logic was ever in scope), not a
+regression of the part that matters most: an exception from a dead socket no
+longer crashes the loop or ejects the bot — verified by execution — it now
+degrades to "deaf until re-triggered" instead.
+**How to apply:** Accepted as-is rather than triggering a second fix wave,
+since (a) the dangerous failure mode is closed and verified, and (b) fully
+validating any further fix needs a real Deepgram session anyway, consistent
+with this project's live-tuning-required constants elsewhere. First thing to
+try if live testing shows the bot going deaf mid-turn: send a keepalive
+immediately before entering the blocking Claude/TTS/injection section in
+`main.py`'s `_run_call_loop`, in addition to the existing idle-based one.
+
 ## 2026-08-12 — Final-review fix pass: wake word, dedup TTL, frame size
 
 **Why:** Whole-branch review surfaced choices the per-task reviews couldn't
