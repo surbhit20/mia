@@ -12,6 +12,49 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-13 — Pivot: replace Playwright JoinWorker with self-hosted Attendee.dev; no bot-account login needed for joining
+
+**Why:** After an entire afternoon fighting Google's automation-detection
+block on sign-in (see the two entries below), decided to test whether a
+self-hosted, purpose-built meeting-bot project had already solved this
+before continuing to patch our own Playwright approach. Verified two things
+directly from Attendee's source and docs before committing to the switch:
+(1) Attendee genuinely supports two-way realtime audio (base64 PCM in/out
+over websocket, `/output_audio` and `/speech` REST alternatives), so it can
+replace the whole join+capture+inject layer, not just the join; (2)
+critically, **signed-in bot login is optional for Google Meet — with none
+configured, the bot joins as an anonymous guest by default.** Signed-in mode
+exists (`bots/templates/projects/partials/google_meet_bot_logins.html`) but
+requires a *paid Google Workspace account on a custom domain* with a
+private-key/certificate auth flow — not password login, and not something
+our free consumer `surbhit.bot@gmail.com` account could use anyway. This
+means the entire Chrome-profile-copying/real-Chrome/command-line-flag saga
+from today is now moot for the join step: Attendee's own bot infrastructure
+handles anonymous join, sidestepping Google's consumer-account sign-in
+detection entirely (which is precisely the problem class Attendee exists to
+solve).
+**What changes:** `join_worker.py` (Playwright), `audio/capture.py`
+(BlackHole), `audio/injection.py` (sounddevice) are retired. New
+`AttendeeClient` module talks to a locally self-hosted Attendee instance
+(Docker Compose: Django + Postgres + Redis, cloned to `~/Desktop/attendee`,
+sibling to this project). VAD, wake-word matching, command buffer, our own
+Deepgram STT wrapper, Claude tool-calling, and ElevenLabs TTS all stay
+unchanged — they just get their audio from/to Attendee's websocket instead
+of BlackHole. The bot Google account is still used for Calendar API access
+(unrelated, already working via OAuth) but is no longer needed for the Meet
+*join* mechanism.
+**Requires:** real AWS credentials + an S3 bucket (Attendee's self-hosting
+guide states the app doesn't work without S3 configured; no documented
+MinIO/local-S3 fallback).
+**Not yet validated:** whether Attendee's anonymous-guest join actually
+works end-to-end against a real Meet call in practice (still needs a live
+test) — the docs/source confirm the *design*, not yet an observed result.
+**Alternatives considered:** continuing to patch our own Playwright
+approach (stealth patches, etc.) — rejected as an unbounded arms race
+against Google's detection, after already burning significant time on
+narrower fixes (`channel="chrome"`, `$HOME` vs `~`, native-profile login)
+that each solved one symptom and hit another.
+
 ## 2026-08-13 — `SETUP.md`'s login command must use `$HOME`, not `~`, and must not sign in from Playwright at all
 
 **Why:** Two real bugs found during live manual setup, on top of the
