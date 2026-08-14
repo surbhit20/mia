@@ -12,6 +12,37 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-14 — Fix: mia went permanently deaf when Deepgram's idle socket died mid-turn
+
+**Why:** Confirmed by live testing (the Gmail search feature made this easy
+to hit): a voice turn involving two Claude calls (tool selection plus the
+Gmail tool's own internal summarization call) and a longer spoken response
+runs long enough for Deepgram's ~10s idle-connection timeout to fire while
+the main loop is blocked mid-turn — the loop only sends keepalives once per
+iteration, and it isn't iterating during a blocking turn. This was already
+a known, documented gap (see the accepted-limitation entry below), but
+"accepted" turned out to mean "the bot goes fully and permanently deaf until
+the process is restarted" once actually observed live — not survivable for
+a real running assistant. `StreamingSTT.send_frame()` and
+`.send_keepalive_if_idle()` now call a new `_reconnect_if_needed()` first:
+if the socket is dead, attempt `stop()` + `start()` again, backed off to at
+most once every 2 seconds so a genuinely unreachable Deepgram doesn't get
+hammered every ~32ms from the audio loop. A failed reconnect attempt is
+caught and logged, not raised, so it degrades back to "still deaf, will
+retry" rather than crashing the call loop.
+**Does not fix:** the root cause (keepalives can't fire during a blocking
+turn) — that's still true, and a long enough turn will still disconnect the
+socket. What changes is the failure mode: a brief gap in transcription
+(bounded by the reconnect handshake time) instead of permanent deafness.
+**Alternatives considered:** sending keepalives from a background timer
+thread during the blocking turn, so the disconnect never happens in the
+first place — more invasive (a second thread touching the same connection
+object `send_frame`/`send_keepalive_if_idle` already touch, needing its own
+locking), and the reconnect approach fixes the actually-observed failure
+mode (permanent deafness) with a much smaller, more contained change.
+Worth revisiting if disconnects turn out to happen often enough in practice
+that even a bounded reconnect gap is disruptive.
+
 ## 2026-08-13 — Live test result: Attendee's anonymous Google Meet join does NOT work (contradicts docs)
 
 **Why this matters:** The previous entry's pivot decision rested on Attendee's
