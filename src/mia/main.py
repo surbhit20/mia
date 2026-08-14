@@ -22,7 +22,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from mia.audio.capture import BlackHoleCapture
-from mia.audio.injection import inject_into_virtual_mic
+from mia.audio.injection import is_playback_active, start_playback, stop_playback
 from mia.audio.vad import FrameVAD
 from mia.command_buffer import CommandBuffer
 from mia.config import Config
@@ -41,7 +41,7 @@ from mia.tools.base import ToolRegistry
 from mia.tools.calendar_tool import build_calendar_tool
 from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
-from mia.turn_state import TurnStateMachine
+from mia.turn_state import TurnState, TurnStateMachine
 from mia.wakeword import WakeWordMatcher
 
 _TOKEN_PATH = Path("~/.mia/token.json").expanduser()
@@ -166,6 +166,10 @@ def _run_call_loop(
                 command_buffer.append(text + " ")
                 return
             if wake_word.matches(text):
+                # Stopping playback here is what makes this a real barge-in
+                # when the wake word arrives during SPEAKING -- harmless no-op
+                # if nothing is currently playing (the normal LISTENING case).
+                stop_playback()
                 turn_state.wake_word_detected()
                 command_buffer.start()
                 # NOTE: the draft dropped the fragment the wake word arrived
@@ -204,6 +208,15 @@ def _run_call_loop(
                             break
 
                 turn_state.tick()
+
+                # A barge-in wake word already moved the machine out of
+                # SPEAKING (and stopped playback) from on_transcript, on the
+                # STT listener thread -- this only fires for a response that
+                # finished on its own, uninterrupted.
+                if turn_state.current() == TurnState.SPEAKING and not is_playback_active():
+                    with lock:
+                        turn_state.finish_speaking()
+
                 frame = capture.read_frame(frame_ms=_FRAME_MS)
 
                 if turn_state.should_process_stt():
@@ -237,18 +250,22 @@ def _run_call_loop(
                 if not command_text:
                     continue
 
-                # NOTE: the draft ran the whole turn unguarded. dispatch_command()
-                # only catches failures inside the tool handler, so a Claude API
-                # error (or an ElevenLabs/playback error) would propagate out and
-                # end the meeting. Worse, an exception between command_captured()
-                # and finish_speaking() would strand the state machine outside
-                # LISTENING, leaving the bot deaf for the rest of the call.
-                # start_speaking() up front plus finish_speaking() in `finally`
-                # guarantees the machine always returns via COOLDOWN ->
-                # LISTENING. Gating is unaffected: should_process_stt() is
-                # already False from COMMAND_CAPTURED onward.
-                with lock:
-                    turn_state.start_speaking()
+                # NOTE: dispatch_command() only catches failures inside the
+                # tool handler, so a Claude API error (or a TTS error) would
+                # otherwise propagate out and end the meeting -- caught below
+                # and recovered via abandon_turn() either way.
+                #
+                # start_speaking() no longer fires unconditionally up front:
+                # SPEAKING now means "audio is playing" specifically (so a
+                # barge-in wake word during SPEAKING has actual audio to
+                # interrupt), so it's called right before start_playback()
+                # instead, only on the path that actually produces audio.
+                # The bare-wake-phrase path and any exception path use
+                # abandon_turn() to recover straight to LISTENING, since
+                # neither has audio to speak or cool down from. A normal,
+                # uninterrupted response's SPEAKING -> COOLDOWN -> LISTENING
+                # transition now happens from the loop's natural-completion
+                # check above, not from a `finally` block here.
                 try:
                     # Spec: a false trigger must stay silent. If nothing was
                     # said beyond the wake phrase itself, the wake word fired
@@ -264,6 +281,8 @@ def _run_call_loop(
                             "bare wake phrase ignored",
                             meeting_url=meet_url,
                         )
+                        with lock:
+                            turn_state.abandon_turn()
                     else:
                         result = dispatch_command(anthropic_client, registry, command_text, history)
                         safe_log(
@@ -275,7 +294,9 @@ def _run_call_loop(
                         audio = synthesize(
                             config.elevenlabs_api_key, result.confirmation
                         )
-                        inject_into_virtual_mic(audio)
+                        with lock:
+                            turn_state.start_speaking()
+                        start_playback(audio)
                 except Exception as exc:
                     safe_log(
                         "error",
@@ -283,9 +304,8 @@ def _run_call_loop(
                         meeting_url=meet_url,
                         error=str(exc),
                     )
-                finally:
                     with lock:
-                        turn_state.finish_speaking()
+                        turn_state.abandon_turn()
         finally:
             stt.stop()
 

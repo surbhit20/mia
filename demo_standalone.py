@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from googleapiclient.discovery import build
 
 from mia.audio.capture import BlackHoleCapture
-from mia.audio.injection import inject_into_virtual_mic
+from mia.audio.injection import is_playback_active, start_playback, stop_playback
 from mia.audio.vad import FrameVAD
 from mia.command_buffer import CommandBuffer
 from mia.config import Config
@@ -36,7 +36,7 @@ from mia.tools.base import ToolRegistry
 from mia.tools.calendar_tool import build_calendar_tool
 from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
-from mia.turn_state import TurnStateMachine
+from mia.turn_state import TurnState, TurnStateMachine
 from mia.wakeword import WakeWordMatcher
 
 _FRAME_MS = 32
@@ -79,6 +79,10 @@ def run() -> None:
                 print(f"  ...captured: {text!r}")
                 return
             if wake_word.matches(text):
+                # Stopping playback here is what makes this a real barge-in
+                # when the wake word arrives during SPEAKING -- harmless
+                # no-op if nothing is currently playing.
+                stop_playback()
                 turn_state.wake_word_detected()
                 command_buffer.start()
                 command_buffer.append(text + " ")
@@ -94,6 +98,15 @@ def run() -> None:
             silence_frames = 0
             while True:
                 turn_state.tick()
+
+                # A barge-in wake word already moved the machine out of
+                # SPEAKING (and stopped playback) from on_transcript, on the
+                # STT listener thread -- this only fires for a response that
+                # finished on its own, uninterrupted.
+                if turn_state.current() == TurnState.SPEAKING and not is_playback_active():
+                    with lock:
+                        turn_state.finish_speaking()
+
                 frame = capture.read_frame(frame_ms=_FRAME_MS)
 
                 if turn_state.should_process_stt():
@@ -120,8 +133,6 @@ def run() -> None:
                     continue
 
                 print(f"[command captured] {command_text!r}")
-                with lock:
-                    turn_state.start_speaking()
                 try:
                     print("  dispatching to Claude...")
                     result = dispatch_command(anthropic_client, registry, command_text, history)
@@ -132,17 +143,20 @@ def run() -> None:
                     ):
                         print("  (bare wake phrase, staying silent)")
                         safe_log("info", "bare wake phrase ignored")
+                        with lock:
+                            turn_state.abandon_turn()
                     else:
                         print(f"  speaking: {result.confirmation!r}")
                         audio = synthesize(config.elevenlabs_api_key, result.confirmation)
-                        inject_into_virtual_mic(audio, device_name=None)
+                        with lock:
+                            turn_state.start_speaking()
+                        start_playback(audio, device_name=None)
                         print("  done.\n")
                 except Exception as exc:
                     print(f"  [error] {exc}")
                     safe_log("error", "voice turn failed", error=str(exc))
-                finally:
                     with lock:
-                        turn_state.finish_speaking()
+                        turn_state.abandon_turn()
         finally:
             stt.stop()
 
