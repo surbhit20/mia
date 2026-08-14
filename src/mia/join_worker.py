@@ -16,6 +16,7 @@ class JoinWorker:
             self._context = self._playwright.chromium.launch_persistent_context(
                 str(self._profile_dir),
                 headless=False,
+                channel="chrome",
                 args=["--use-fake-ui-for-media-stream"],
             )
             self._page = self._context.new_page()

@@ -34,8 +34,23 @@ notification sounds while `mia` is running.
 
 ## 2. Bot account login and device selection (one time, in Chromium)
 
-1. Run `python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('~/.mia/chrome-profile', headless=False); input('press enter when done'); b.close()"`.
-2. Log into the bot's dedicated Google account.
+1. Run `python3 -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('$HOME/.mia/chrome-profile', headless=False, channel='chrome'); input('press enter when done'); b.close()"`.
+   (`channel='chrome'` uses your real, locally-installed Google Chrome
+   instead of Playwright's bundled Chromium — Google's sign-in flow
+   detects and blocks the bundled one outright. Requires Google Chrome to
+   already be installed. Use `$HOME`, not `~` — `~` is not expanded inside
+   this quoted string and will silently create the profile in the wrong
+   place.)
+2. **Do not sign in from this automated window** — Google also blocks
+   sign-in for any Chrome instance launched with extra command-line flags
+   (including a plain `--user-data-dir`), automation or not. Instead: open
+   Chrome normally (double-click the app, no terminal), use its native
+   **profile switcher → Add Chrome Profile** to create and sign into a
+   separate profile as the bot account, and do the Meet call / device
+   selection (step 3 below) in *that* window. Then quit Chrome and copy
+   that profile's data into `~/.mia/chrome-profile` before running the
+   command above again (which will now just reuse the already-signed-in
+   session instead of hitting the sign-in flow at all).
 3. Join any Meet call, open in-call device settings, and select
    **BlackHole 2ch** as both the microphone and speaker.
 4. Press enter in the terminal to close — this profile is reused on every
@@ -48,12 +63,21 @@ Terminal (or whichever app runs `mia`) to control Google Chrome via
 Automation. Click **OK**. If missed, grant it manually under
 **System Settings → Privacy & Security → Automation**.
 
-## 4. Google Calendar OAuth
+## 4. Google Calendar + Gmail OAuth
 
 Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env` (from a Google
-Cloud project with the Calendar API enabled), then start `mia`
+Cloud project with both the **Calendar API** and the **Gmail API**
+enabled — `gmail.readonly` is a restricted scope, so it must also be
+listed under the OAuth consent screen's scopes). Then start `mia`
 (`python -m mia.main`) once: it opens the OAuth consent flow in a browser
-and stores the resulting refresh token at `~/.mia/token.json`.
+(now asking for both Calendar and Gmail read access) and stores the
+resulting refresh token at `~/.mia/token.json`.
+
+If you're upgrading from a version of `mia` that only requested Calendar
+access, delete the cached token once (`rm -f ~/.mia/token.json`) so the
+next run re-consents with the full scope list — `mia` also detects this
+automatically and re-prompts (see `_authorize_google` in `main.py`), but
+deleting it manually avoids relying on that check.
 
 ## 5. Environment variables
 
