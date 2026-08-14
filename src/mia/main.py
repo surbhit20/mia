@@ -30,7 +30,7 @@ from mia.detection.mic_monitor import is_mic_active
 from mia.detection.tab_detector import find_active_meet_tab
 from mia.detection.trigger import decide
 from mia.join_worker import JoinWorker
-from mia.llm import dispatch_command
+from mia.llm import ConversationHistory, dispatch_command
 from mia.logging_setup import configure as configure_logging
 from mia.logging_setup import safe_log
 from mia.notify import NotificationResult, prompt_join
@@ -38,12 +38,16 @@ from mia.state import StateStore
 from mia.stt import StreamingSTT
 from mia.tools.base import ToolRegistry
 from mia.tools.calendar_tool import build_calendar_tool
+from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
 from mia.turn_state import TurnStateMachine
 from mia.wakeword import WakeWordMatcher
 
 _TOKEN_PATH = Path("~/.mia/token.json").expanduser()
-_SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/gmail.readonly",
+]
 
 # Outer detection poll interval.
 _POLL_INTERVAL_SECONDS = 5.0
@@ -80,7 +84,7 @@ def _save_credentials(creds: Credentials) -> None:
     _TOKEN_PATH.chmod(0o600)
 
 
-def _authorize_calendar(config: Config):
+def _authorize_google(config: Config):
     creds = None
     if _TOKEN_PATH.exists():
         creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), _SCOPES)
@@ -93,7 +97,7 @@ def _authorize_calendar(config: Config):
                 creds.refresh(Request())
                 _save_credentials(creds)
             except Exception as exc:
-                safe_log("warning", "calendar token refresh failed", error=str(exc))
+                safe_log("warning", "google token refresh failed", error=str(exc))
                 creds = None
 
     if creds is None or not creds.valid:
@@ -111,7 +115,7 @@ def _authorize_calendar(config: Config):
         creds = flow.run_local_server(port=0)
         _save_credentials(creds)
 
-    return build("calendar", "v3", credentials=creds)
+    return creds
 
 
 def _run_call_loop(
@@ -124,6 +128,7 @@ def _run_call_loop(
     wake_word = WakeWordMatcher(config.wake_word, threshold=config.fuzzy_threshold)
     command_buffer = CommandBuffer()
     vad = FrameVAD(frame_ms=_FRAME_MS)
+    history = ConversationHistory()
 
     # NOTE: StreamingSTT (Task 15) dispatches on_transcript from a background
     # listener thread, while the loop below mutates the same turn_state /
@@ -235,7 +240,7 @@ def _run_call_loop(
                 with lock:
                     turn_state.start_speaking()
                 try:
-                    result = dispatch_command(anthropic_client, registry, command_text)
+                    result = dispatch_command(anthropic_client, registry, command_text, history)
                     safe_log(
                         "info",
                         "command dispatched",
@@ -336,10 +341,13 @@ def run() -> None:
     config = Config.from_env()
     configure_logging(config)
 
-    calendar_service = _authorize_calendar(config)
+    creds = _authorize_google(config)
+    calendar_service = build("calendar", "v3", credentials=creds)
+    gmail_service = build("gmail", "v1", credentials=creds)
+    anthropic_client = Anthropic(api_key=config.anthropic_api_key)
     registry = ToolRegistry()
     registry.register(build_calendar_tool(calendar_service))
-    anthropic_client = Anthropic(api_key=config.anthropic_api_key)
+    registry.register(build_gmail_search_tool(gmail_service, anthropic_client))
     state = StateStore(config.state_file)
 
     safe_log("info", "mia started")

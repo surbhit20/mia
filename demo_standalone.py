@@ -20,19 +20,21 @@ import time
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+from googleapiclient.discovery import build
 
 from mia.audio.capture import BlackHoleCapture
 from mia.audio.injection import inject_into_virtual_mic
 from mia.audio.vad import FrameVAD
 from mia.command_buffer import CommandBuffer
 from mia.config import Config
-from mia.llm import dispatch_command
+from mia.llm import ConversationHistory, dispatch_command
 from mia.logging_setup import configure as configure_logging
 from mia.logging_setup import safe_log
-from mia.main import _authorize_calendar
+from mia.main import _authorize_google
 from mia.stt import StreamingSTT
 from mia.tools.base import ToolRegistry
 from mia.tools.calendar_tool import build_calendar_tool
+from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
 from mia.turn_state import TurnStateMachine
 from mia.wakeword import WakeWordMatcher
@@ -46,15 +48,19 @@ def run() -> None:
     config = Config.from_env()
     configure_logging(config)
 
-    calendar_service = _authorize_calendar(config)
+    creds = _authorize_google(config)
+    calendar_service = build("calendar", "v3", credentials=creds)
+    gmail_service = build("gmail", "v1", credentials=creds)
+    anthropic_client = Anthropic(api_key=config.anthropic_api_key)
     registry = ToolRegistry()
     registry.register(build_calendar_tool(calendar_service))
-    anthropic_client = Anthropic(api_key=config.anthropic_api_key)
+    registry.register(build_gmail_search_tool(gmail_service, anthropic_client))
 
     turn_state = TurnStateMachine()
     wake_word = WakeWordMatcher(config.wake_word, threshold=config.fuzzy_threshold)
     command_buffer = CommandBuffer()
     vad = FrameVAD(frame_ms=_FRAME_MS)
+    history = ConversationHistory()
     lock = threading.Lock()
 
     turn_state.wake_word_detected()
@@ -118,7 +124,7 @@ def run() -> None:
                     turn_state.start_speaking()
                 try:
                     print("  dispatching to Claude...")
-                    result = dispatch_command(anthropic_client, registry, command_text)
+                    result = dispatch_command(anthropic_client, registry, command_text, history)
                     safe_log("info", "command dispatched", tool=result.tool_name)
 
                     if result.tool_name is None and not wake_word.strip_wake_phrase(
