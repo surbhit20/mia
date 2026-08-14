@@ -51,15 +51,25 @@ rejected WebSocket connection: HTTP 401` rather than the SDK's intended
 raises). The error is still clear and mentions the 401 status, so this
 wrapper does not attempt to paper over it.
 
-Liveness: Deepgram closes an idle live connection server-side, and the main
-loop stops sending audio only for the COMMAND_CAPTURED portion of a voice
-turn (the Claude + TTS-generation window) -- audio keeps flowing during
-SPEAKING now, since barge-in self-echo is filtered by content
-(`wakeword.is_self_echo`) rather than by blocking STT. `send_keepalive_if_idle()`
-therefore puts a KeepAlive on the wire during that shorter gap, and
-CLOSE/ERROR handlers plus try/except around every socket call make a dead
-connection visible and non-fatal instead of an exception that unwinds the
-call loop and ejects the bot from the meeting.
+Liveness: Deepgram closes an idle live connection server-side (confirmed
+live: `ConnectionClosedError(code=1011, reason='Deepgram did not receive
+audio data or a text message within the timeout window')`), and the main
+loop stops sending audio for the COMMAND_CAPTURED portion of a voice turn
+(the Claude-dispatch + TTS-generation window). Root-caused live: this window
+is fully synchronous/blocking, and the original `send_keepalive_if_idle()`
+was only ever called from the *caller's own loop* -- which cannot iterate
+again until COMMAND_CAPTURED finishes. So for any turn where Claude dispatch
++ TTS synthesis took longer than Deepgram's real idle timeout (observed
+~5s, not the ~10s originally assumed), the connection was *guaranteed* to
+die, not just at risk of it -- the Gmail-search tool's extra internal Claude
+call plus longer spoken summaries made this easy to hit. Fixed by giving
+`StreamingSTT` its own background keepalive thread (started in `start()`,
+stopped in `stop()`) that calls `send_keepalive_if_idle()` on a fixed wall-
+clock interval, independent of whatever the caller's thread is doing.
+CLOSE/ERROR handlers plus try/except around every socket call still make a
+dead connection visible and non-fatal instead of an exception that unwinds
+the call loop and ejects the bot from the meeting, and `_reconnect_if_needed`
+still recovers a connection that dies for some other reason.
 """
 
 import threading
@@ -105,6 +115,8 @@ class StreamingSTT:
         self._connected = False
         self._last_send = 0.0
         self._last_reconnect_attempt = 0.0
+        self._keepalive_thread = None
+        self._keepalive_stop = None
 
     def start(self) -> None:
         self._connect_cm = self._client.listen.v1.connect(
@@ -127,13 +139,13 @@ class StreamingSTT:
             if transcript:
                 self._on_transcript(transcript, bool(message.is_final))
 
-        def _handle_close(_event) -> None:
+        def _handle_close(event) -> None:
             self._connected = False
-            safe_log("warning", "deepgram connection closed")
+            safe_log("warning", "deepgram connection closed", event=repr(event))
 
         def _handle_error(event) -> None:
             self._connected = False
-            safe_log("error", "deepgram connection error", error=str(event))
+            safe_log("error", "deepgram connection error", error=repr(event))
 
         self._connection.on(EventType.MESSAGE, _handle_message)
         self._connection.on(EventType.CLOSE, _handle_close)
@@ -150,6 +162,23 @@ class StreamingSTT:
             target=self._connection.start_listening, daemon=True
         )
         self._listen_thread.start()
+
+        # Runs on its own clock, independent of the caller's loop -- the
+        # caller can be blocked in a synchronous Claude/TTS call for the
+        # entire COMMAND_CAPTURED window, during which it cannot call
+        # send_keepalive_if_idle() itself (see this module's docstring).
+        self._keepalive_stop = threading.Event()
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop, daemon=True
+        )
+        self._keepalive_thread.start()
+
+    def _keepalive_loop(self) -> None:
+        # Event.wait(timeout) returns True once .set() is called (stop
+        # requested -- exit promptly) or False once the timeout elapses
+        # with no stop signal (send a keepalive, then wait again).
+        while not self._keepalive_stop.wait(timeout=_KEEPALIVE_IDLE_SECONDS):
+            self.send_keepalive_if_idle()
 
     def is_connected(self) -> bool:
         return self._connected and self._connection is not None
@@ -205,6 +234,12 @@ class StreamingSTT:
 
     def stop(self) -> None:
         self._connected = False
+        if self._keepalive_stop is not None:
+            self._keepalive_stop.set()
+        if self._keepalive_thread is not None:
+            self._keepalive_thread.join(timeout=_KEEPALIVE_IDLE_SECONDS + 1)
+            self._keepalive_thread = None
+        self._keepalive_stop = None
         if self._connection is not None:
             try:
                 self._connection.send_close_stream()

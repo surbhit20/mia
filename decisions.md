@@ -12,6 +12,41 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-14 — Fix: Deepgram's own idle-timeout was structurally guaranteed on slow turns
+
+**Why:** Live-debugged (systematic-debugging process, not guessed): after
+barge-in shipped, a long Gmail-search turn reliably disconnected Deepgram
+mid-turn. Added direct `print()`/`repr()` logging of the raw CLOSE/ERROR
+event (Logfire's console handler only prints the log message, not
+structured fields — the dashboard has them, but that's a slower loop than
+seeing it in the terminal). The real event confirmed the root cause exactly:
+`ConnectionClosedError(code=1011, reason='Deepgram did not receive audio
+data or a text message within the timeout window')`, firing ~5.4s after
+"command dispatched" — i.e. mid-`synthesize()`, before playback even
+started. `send_keepalive_if_idle()` was only ever called from the *caller's
+own loop*, which cannot iterate again until the fully-synchronous
+Claude-dispatch + TTS-synthesis sequence (`COMMAND_CAPTURED`) finishes. So
+this wasn't a probabilistic risk — any turn whose Claude+TTS work took
+longer than Deepgram's real idle timeout (observed ~5s, not the ~10s
+originally assumed) was **guaranteed** to disconnect. The Gmail tool's extra
+internal Claude call plus longer spoken summaries made it easy to hit
+reliably, which is what surfaced it.
+**Fix:** `StreamingSTT` now runs its own background keepalive thread
+(started in `start()`, stopped in `stop()`) calling
+`send_keepalive_if_idle()` on a fixed wall-clock interval
+(`_KEEPALIVE_IDLE_SECONDS`), independent of whatever the caller's thread is
+doing. This supersedes the entry below (2026-08-14, "mia went permanently
+deaf when Deepgram's idle socket died mid-turn") — that fix made a *dead*
+connection recoverable; this fix stops the most common cause of death from
+happening at all during a slow turn. The `_reconnect_if_needed()` recovery
+path stays as a second line of defense for disconnects from other causes
+(network blips, etc.).
+**Alternatives considered:** making `dispatch_command`/`synthesize` run
+non-blocking (e.g. on a background thread) so the main loop itself could
+keep iterating during a turn — a materially bigger architectural change
+(introduces concurrency into the Claude/TTS pipeline) for no benefit beyond
+what a dedicated keepalive thread already solves directly.
+
 ## 2026-08-14 — Fix: mia went permanently deaf when Deepgram's idle socket died mid-turn
 
 **Why:** Confirmed by live testing (the Gmail search feature made this easy
