@@ -13,6 +13,16 @@ default audio devices and drops the meeting-detection/join layer that
 Run with: python demo_standalone.py
 Say: "Hey Mia, block 30 minutes for focus time" (or whatever WAKE_WORD is
 set to in .env) and wait for the spoken confirmation.
+
+To test barge-in (interrupting her mid-response by saying the wake word
+again), wear headphones for the output. Confirmed live: with built-in
+speakers, the mic hears mia's own voice loudly enough to drown out your
+attempt to talk over her, so nothing gets transcribed at all -- not a
+self-echo-filter bug, a laptop-acoustics problem specific to this demo's
+default-mic/default-speaker setup. The real Meet path (via BlackHole, once
+that integration exists) won't have this issue: audio there is a clean
+digital mix through Meet's own pipeline, not a physical mic/speaker
+competition.
 """
 
 import threading

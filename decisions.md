@@ -12,6 +12,35 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-14 — Investigated: barge-in "not working" in the demo was acoustics, not code
+
+**Why this matters:** After the Deepgram keepalive fix, barge-in still
+appeared completely non-functional live-testing `demo_standalone.py`.
+Root-caused via the same process (added temporary `print()` diagnostics
+showing every `SPEAKING`-time transcript and its `is_self_echo` verdict),
+rather than assuming the self-echo filter (previous entry below) was too
+aggressive. The evidence: every transcript captured during a response was a
+near-verbatim echo of mia's *own* words, correctly flagged
+`self_echo=True` -- and the user's actual barge-in attempt never appeared
+in the transcript stream at all. Conclusion: on a laptop with built-in
+mic + built-in speakers and no physical separation, mia's own voice
+through the speakers is loud/close enough to the mic to drown out a human
+trying to talk over her -- the audio never reaches Deepgram clearly enough
+to transcribe, so there's nothing for the self-echo filter or the wake-word
+matcher to even evaluate. Confirmed by retrying with headphones on for
+output: barge-in worked correctly on the first attempt.
+**Not a code bug** -- the state machine, self-echo filter, and barge-in
+transitions were all already correct (per the earlier task reviews). This
+is a `demo_standalone.py`-specific testing-setup limitation, documented in
+its module docstring. The real Meet path (via BlackHole, once built) won't
+have this problem: audio arrives as a clean digital mix through Meet's own
+pipeline, not a physical mic/speaker competition, so no headphones-style
+workaround should be needed there.
+**Cleanup:** removed the temporary debug `print()` statements added for
+this investigation (both this one and the earlier `stt.py` CLOSE/ERROR
+event prints) once root cause was confirmed, per the debugging process --
+the `repr(event)` improvement in `safe_log`'s structured fields was kept.
+
 ## 2026-08-14 — Fix: Deepgram's own idle-timeout was structurally guaranteed on slow turns
 
 **Why:** Live-debugged (systematic-debugging process, not guessed): after
