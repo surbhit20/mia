@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from mia.logging_setup import safe_log
 from mia.timeutil import local_timezone_label
 from mia.tools.base import ToolRegistry
 
@@ -86,11 +87,13 @@ def dispatch_command(
     tool = registry.get(tool_use_block.name)
     if tool is None:
         confirmation = "Sorry, that didn't work — try again?"
+        safe_log("error", "tool not found in registry", tool_name=tool_use_block.name)
     else:
         try:
             confirmation = tool.handler(tool_use_block.input)
-        except Exception:
+        except Exception as exc:
             confirmation = "Sorry, that didn't work — try again?"
+            safe_log("error", "tool handler failed", tool_name=tool.name, error=str(exc))
 
     tool_result_message = {
         "role": "user",
