@@ -43,6 +43,7 @@ from mia.logging_setup import safe_log
 from mia.main import _authorize_google
 from mia.stt import StreamingSTT
 from mia.tools.base import ToolRegistry
+from mia.tools.calendar_cancel_tool import build_cancel_calendar_event_tool
 from mia.tools.calendar_fetch_tool import build_calendar_fetch_tool
 from mia.tools.calendar_tool import build_calendar_tool
 from mia.tools.gmail_tool import build_gmail_search_tool
@@ -66,6 +67,7 @@ def run() -> None:
     registry = ToolRegistry()
     registry.register(build_calendar_tool(calendar_service))
     registry.register(build_calendar_fetch_tool(calendar_service))
+    registry.register(build_cancel_calendar_event_tool(calendar_service))
     registry.register(build_gmail_search_tool(gmail_service, anthropic_client))
 
     turn_state = TurnStateMachine()
