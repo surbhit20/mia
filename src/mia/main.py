@@ -8,6 +8,7 @@ each one is either a bug in the draft or a mismatch with a dependency module's
 actually-committed behaviour (see task-19-report.md for the full rationale).
 """
 
+import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -87,18 +88,27 @@ def _save_credentials(creds: Credentials) -> None:
 def _authorize_google(config: Config):
     creds = None
     if _TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), _SCOPES)
-        # NOTE: the draft used the cached token as-is. A cached access token is
-        # expired within an hour of the first run, so without this refresh the
-        # calendar enricher and the calendar tool would fail on every
-        # subsequent run of the process.
-        if not creds.valid and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                _save_credentials(creds)
-            except Exception as exc:
-                safe_log("warning", "google token refresh failed", error=str(exc))
-                creds = None
+        cached_info = json.loads(_TOKEN_PATH.read_text())
+        if not set(_SCOPES).issubset(set(cached_info.get("scopes") or [])):
+            # Scope list has widened since this token was issued (e.g. Gmail
+            # search added after the user first authorized). Credentials
+            # objects trust whatever scope list they're constructed with, so
+            # loading the cached token here would silently claim scopes it
+            # was never actually granted -- force a fresh consent instead.
+            creds = None
+        else:
+            creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), _SCOPES)
+            # NOTE: the draft used the cached token as-is. A cached access token is
+            # expired within an hour of the first run, so without this refresh the
+            # calendar enricher, calendar tool, and Gmail search tool would fail on
+            # every subsequent run of the process.
+            if not creds.valid and creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                    _save_credentials(creds)
+                except Exception as exc:
+                    safe_log("warning", "google token refresh failed", error=str(exc))
+                    creds = None
 
     if creds is None or not creds.valid:
         flow = InstalledAppFlow.from_client_config(
@@ -240,28 +250,28 @@ def _run_call_loop(
                 with lock:
                     turn_state.start_speaking()
                 try:
-                    result = dispatch_command(anthropic_client, registry, command_text, history)
-                    safe_log(
-                        "info",
-                        "command dispatched",
-                        tool=result.tool_name,
-                        meeting_url=meet_url,
-                    )
-                    # Spec: a false trigger must stay silent. If no tool matched
-                    # *and* nothing was said beyond the wake phrase itself, the
-                    # wake word fired on stray speech -- speaking "sorry, I
-                    # didn't catch that" into a live meeting would be the bug.
-                    # A genuine unrecognized command (words after the wake
-                    # phrase) still gets the spoken fallback.
-                    if result.tool_name is None and not wake_word.strip_wake_phrase(
-                        command_text
-                    ):
+                    # Spec: a false trigger must stay silent. If nothing was
+                    # said beyond the wake phrase itself, the wake word fired
+                    # on stray speech -- skip dispatch_command entirely so a
+                    # bare trigger costs no Claude call and consumes no slot
+                    # in the bounded conversation-memory window. A genuine
+                    # unrecognized command (real words after the wake phrase)
+                    # still reaches dispatch_command and gets its own spoken
+                    # fallback from there.
+                    if not wake_word.strip_wake_phrase(command_text):
                         safe_log(
                             "info",
                             "bare wake phrase ignored",
                             meeting_url=meet_url,
                         )
                     else:
+                        result = dispatch_command(anthropic_client, registry, command_text, history)
+                        safe_log(
+                            "info",
+                            "command dispatched",
+                            tool=result.tool_name,
+                            meeting_url=meet_url,
+                        )
                         audio = synthesize(
                             config.elevenlabs_api_key, result.confirmation
                         )

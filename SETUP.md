@@ -63,12 +63,21 @@ Terminal (or whichever app runs `mia`) to control Google Chrome via
 Automation. Click **OK**. If missed, grant it manually under
 **System Settings → Privacy & Security → Automation**.
 
-## 4. Google Calendar OAuth
+## 4. Google Calendar + Gmail OAuth
 
 Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env` (from a Google
-Cloud project with the Calendar API enabled), then start `mia`
+Cloud project with both the **Calendar API** and the **Gmail API**
+enabled — `gmail.readonly` is a restricted scope, so it must also be
+listed under the OAuth consent screen's scopes). Then start `mia`
 (`python -m mia.main`) once: it opens the OAuth consent flow in a browser
-and stores the resulting refresh token at `~/.mia/token.json`.
+(now asking for both Calendar and Gmail read access) and stores the
+resulting refresh token at `~/.mia/token.json`.
+
+If you're upgrading from a version of `mia` that only requested Calendar
+access, delete the cached token once (`rm -f ~/.mia/token.json`) so the
+next run re-consents with the full scope list — `mia` also detects this
+automatically and re-prompts (see `_authorize_google` in `main.py`), but
+deleting it manually avoids relying on that check.
 
 ## 5. Environment variables
 

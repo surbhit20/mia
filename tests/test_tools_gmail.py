@@ -33,6 +33,7 @@ def test_handler_summarizes_results_via_claude():
             "headers": [
                 {"name": "From", "value": "Bob <bob@example.com>"},
                 {"name": "Subject", "value": "Project Proposal"},
+                {"name": "Date", "value": "Mon, 10 Aug 2026 09:15:00 -0700"},
             ]
         },
     }
@@ -53,13 +54,14 @@ def test_handler_summarizes_results_via_claude():
         userId="me", q="project proposal", maxResults=5
     )
     gmail_service.users.return_value.messages.return_value.get.assert_called_once_with(
-        userId="me", id="msg1", format="metadata", metadataHeaders=["From", "Subject"]
+        userId="me", id="msg1", format="metadata", metadataHeaders=["From", "Subject", "Date"]
     )
     _, kwargs = anthropic_client.messages.create.call_args
     prompt_text = kwargs["messages"][0]["content"]
     assert "Bob <bob@example.com>" in prompt_text
     assert "Project Proposal" in prompt_text
     assert "project proposal" in prompt_text  # the original query is included
+    assert "Mon, 10 Aug 2026 09:15:00 -0700" in prompt_text
 
 
 def test_handler_surfaces_gmail_api_error_as_exception():
@@ -73,3 +75,53 @@ def test_handler_surfaces_gmail_api_error_as_exception():
         assert False, "expected RuntimeError to propagate"
     except RuntimeError:
         pass
+
+
+def test_handler_includes_multiple_results_in_summarization_prompt():
+    gmail_service = MagicMock()
+    list_execute = gmail_service.users.return_value.messages.return_value.list.return_value.execute
+    list_execute.return_value = {"messages": [{"id": "msg1", "threadId": "t1"}, {"id": "msg2", "threadId": "t2"}]}
+
+    def _get_side_effect(userId, id, format, metadataHeaders):
+        response = MagicMock()
+        if id == "msg1":
+            response.execute.return_value = {
+                "id": "msg1",
+                "snippet": "First email preview",
+                "payload": {"headers": [
+                    {"name": "From", "value": "Bob <bob@example.com>"},
+                    {"name": "Subject", "value": "Project Proposal"},
+                    {"name": "Date", "value": "Mon, 10 Aug 2026 09:15:00 -0700"},
+                ]},
+            }
+        else:
+            response.execute.return_value = {
+                "id": "msg2",
+                "snippet": "Second email preview",
+                "payload": {"headers": [
+                    {"name": "From", "value": "Alice <alice@example.com>"},
+                    {"name": "Subject", "value": "Also about the proposal"},
+                    {"name": "Date", "value": "Tue, 11 Aug 2026 14:00:00 -0700"},
+                ]},
+            }
+        return response
+
+    gmail_service.users.return_value.messages.return_value.get.side_effect = _get_side_effect
+
+    anthropic_client = MagicMock()
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "I found two emails about the proposal, one from Bob and one from Alice."
+    response = MagicMock()
+    response.content = [text_block]
+    anthropic_client.messages.create.return_value = response
+
+    tool = build_gmail_search_tool(gmail_service, anthropic_client)
+    result = tool.handler({"query": "proposal"})
+
+    assert result == "I found two emails about the proposal, one from Bob and one from Alice."
+    assert gmail_service.users.return_value.messages.return_value.get.call_count == 2
+    _, kwargs = anthropic_client.messages.create.call_args
+    prompt_text = kwargs["messages"][0]["content"]
+    assert "Bob <bob@example.com>" in prompt_text
+    assert "Alice <alice@example.com>" in prompt_text

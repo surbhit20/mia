@@ -34,7 +34,7 @@ def _fetch_message_summaries(gmail_service, query: str, max_results: int = 5) ->
                 userId="me",
                 id=ref["id"],
                 format="metadata",
-                metadataHeaders=["From", "Subject"],
+                metadataHeaders=["From", "Subject", "Date"],
             )
             .execute()
         )
@@ -43,6 +43,7 @@ def _fetch_message_summaries(gmail_service, query: str, max_results: int = 5) ->
             {
                 "from": headers.get("From", "(unknown sender)"),
                 "subject": headers.get("Subject", "(no subject)"),
+                "date": headers.get("Date", "(unknown date)"),
                 "snippet": message.get("snippet", ""),
             }
         )
@@ -51,7 +52,7 @@ def _fetch_message_summaries(gmail_service, query: str, max_results: int = 5) ->
 
 def _summarize_results(anthropic_client, query: str, summaries: list[dict]) -> str:
     listing = "\n".join(
-        f"- From: {s['from']}, Subject: {s['subject']}, Preview: {s['snippet']}"
+        f"- From: {s['from']}, Subject: {s['subject']}, Date: {s['date']}, Preview: {s['snippet']}"
         for s in summaries
     )
     prompt = (
@@ -65,6 +66,7 @@ def _summarize_results(anthropic_client, query: str, summaries: list[dict]) -> s
     response = anthropic_client.messages.create(
         model="claude-sonnet-5",
         max_tokens=200,
+        thinking={"type": "disabled"},
         messages=[{"role": "user", "content": prompt}],
     )
     text_block = next((b for b in response.content if b.type == "text"), None)

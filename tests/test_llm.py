@@ -146,3 +146,48 @@ def test_history_omits_tool_result_when_no_tool_was_used():
 
     messages = history.as_messages()
     assert len(messages) == 2  # user + assistant only, no tool_result
+
+
+def test_disables_parallel_tool_use_to_prevent_unpaired_tool_results():
+    registry = ToolRegistry()
+    client = MagicMock()
+    client.messages.create.return_value = _mock_text_only_response()
+    history = ConversationHistory()
+
+    dispatch_command(client, registry, "test", history)
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+
+def test_tool_use_and_tool_result_counts_match_in_history_across_all_branches():
+    def _count_blocks(messages):
+        tool_use_count = 0
+        tool_result_count = 0
+        for m in messages:
+            if m["role"] == "assistant" and isinstance(m["content"], list):
+                tool_use_count += sum(1 for b in m["content"] if getattr(b, "type", None) == "tool_use")
+            if m["role"] == "user" and isinstance(m["content"], list):
+                tool_result_count += sum(1 for b in m["content"] if b.get("type") == "tool_result")
+        return tool_use_count, tool_result_count
+
+    registry = ToolRegistry()
+    registry.register(Tool(name="ok_tool", description="d", input_schema={}, handler=lambda a: "ok"))
+    def boom(args):
+        raise RuntimeError("boom")
+    registry.register(Tool(name="boom_tool", description="d", input_schema={}, handler=boom))
+
+    client = MagicMock()
+    history = ConversationHistory()
+
+    client.messages.create.return_value = _mock_tool_use_response("ok_tool", {}, block_id="t1")
+    dispatch_command(client, registry, "cmd1", history)
+
+    client.messages.create.return_value = _mock_tool_use_response("missing_tool", {}, block_id="t2")
+    dispatch_command(client, registry, "cmd2", history)
+
+    client.messages.create.return_value = _mock_tool_use_response("boom_tool", {}, block_id="t3")
+    dispatch_command(client, registry, "cmd3", history)
+
+    tool_use_count, tool_result_count = _count_blocks(history.as_messages())
+    assert tool_use_count == tool_result_count == 3

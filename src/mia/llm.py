@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from mia.timeutil import local_timezone_label
@@ -71,6 +71,8 @@ def dispatch_command(
         max_tokens=256,
         system=_system_prompt(),
         tools=registry.anthropic_tool_specs(),
+        tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+        thinking={"type": "disabled"},
         messages=messages,
     )
 
