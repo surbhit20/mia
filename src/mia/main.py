@@ -41,6 +41,7 @@ from mia.tools.base import ToolRegistry
 from mia.tools.calendar_cancel_tool import build_cancel_calendar_event_tool
 from mia.tools.calendar_fetch_tool import build_calendar_fetch_tool
 from mia.tools.calendar_tool import build_calendar_tool
+from mia.tools.calendar_update_tool import build_update_calendar_event_tool
 from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
 from mia.turn_state import TurnState, TurnStateMachine
@@ -395,6 +396,7 @@ def run() -> None:
     registry.register(build_calendar_tool(calendar_service))
     registry.register(build_calendar_fetch_tool(calendar_service))
     registry.register(build_cancel_calendar_event_tool(calendar_service))
+    registry.register(build_update_calendar_event_tool(calendar_service))
     registry.register(build_gmail_search_tool(gmail_service, anthropic_client))
     state = StateStore(config.state_file)
 
