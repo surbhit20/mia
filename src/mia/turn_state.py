@@ -20,7 +20,12 @@ class TurnStateMachine:
         return self._state
 
     def wake_word_detected(self) -> None:
-        if self._state in (TurnState.IDLE, TurnState.LISTENING):
+        # SPEAKING is included so a wake word heard while mia is talking
+        # interrupts her (barge-in) rather than being ignored. COMMAND_CAPTURED
+        # (Claude dispatch + TTS synthesis in flight) stays excluded on purpose:
+        # there's no audio playing yet to interrupt, and canceling an in-flight
+        # Claude call is out of scope.
+        if self._state in (TurnState.IDLE, TurnState.LISTENING, TurnState.SPEAKING):
             self._state = TurnState.LISTENING
 
     def command_captured(self) -> None:
@@ -36,6 +41,14 @@ class TurnStateMachine:
             self._state = TurnState.COOLDOWN
             self._cooldown_started_at = self._clock()
 
+    def abandon_turn(self) -> None:
+        """Recover directly to LISTENING with no audio played -- used for a
+        bare wake-phrase trigger (nothing to say) or when an error occurs
+        before or during synthesis (nothing to play). Skips SPEAKING/COOLDOWN
+        entirely since there's no audio to interrupt or cool down from."""
+        if self._state in (TurnState.COMMAND_CAPTURED, TurnState.SPEAKING):
+            self._state = TurnState.LISTENING
+
     def tick(self) -> None:
         if self._state != TurnState.COOLDOWN or self._cooldown_started_at is None:
             return
@@ -44,4 +57,7 @@ class TurnStateMachine:
             self._cooldown_started_at = None
 
     def should_process_stt(self) -> bool:
-        return self._state == TurnState.LISTENING
+        # SPEAKING is included so STT keeps flowing to Deepgram while mia
+        # talks -- otherwise the wake-word matcher could never see a
+        # barge-in attempt in the first place.
+        return self._state in (TurnState.LISTENING, TurnState.SPEAKING)
