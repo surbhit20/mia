@@ -76,6 +76,15 @@ from mia.logging_setup import safe_log
 # iteration.
 _KEEPALIVE_IDLE_SECONDS = 5.0
 
+# Once disconnected (e.g. the server-side idle timeout fires mid-turn, see
+# send_keepalive_if_idle's docstring), nothing previously tried to reconnect
+# -- is_connected() just stayed False forever, silently deafening the bot
+# for the rest of the process's life. Both send_frame() and
+# send_keepalive_if_idle() now attempt a reconnect first; this bounds how
+# often a reconnect is attempted so a genuinely unreachable Deepgram doesn't
+# get hammered every ~32ms from the audio loop.
+_RECONNECT_BACKOFF_SECONDS = 2.0
+
 
 class StreamingSTT:
     def __init__(self, api_key: str, on_transcript: Callable[[str, bool], None]):
@@ -90,6 +99,7 @@ class StreamingSTT:
         # after answering exactly one command.
         self._connected = False
         self._last_send = 0.0
+        self._last_reconnect_attempt = 0.0
 
     def start(self) -> None:
         self._connect_cm = self._client.listen.v1.connect(
@@ -139,7 +149,24 @@ class StreamingSTT:
     def is_connected(self) -> bool:
         return self._connected and self._connection is not None
 
+    def _reconnect_if_needed(self) -> None:
+        if self.is_connected():
+            return
+        now = time.monotonic()
+        if now - self._last_reconnect_attempt < _RECONNECT_BACKOFF_SECONDS:
+            return
+        self._last_reconnect_attempt = now
+        safe_log("warning", "deepgram reconnecting")
+        try:
+            self.stop()
+            self.start()
+        except Exception as exc:
+            # A failed reconnect must not raise into the audio loop -- stay
+            # disconnected and let the next backoff window try again.
+            safe_log("error", "deepgram reconnect failed", error=str(exc))
+
     def send_frame(self, frame: bytes) -> None:
+        self._reconnect_if_needed()
         if not self.is_connected():
             return
         try:
@@ -158,6 +185,7 @@ class StreamingSTT:
         turn-state gate lets real frames through; it only puts a KeepAlive on
         the wire once the stream has actually been idle.
         """
+        self._reconnect_if_needed()
         if not self.is_connected():
             return
         now = time.monotonic()
