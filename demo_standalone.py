@@ -43,6 +43,7 @@ from mia.logging_setup import safe_log
 from mia.main import _authorize_google
 from mia.stt import StreamingSTT
 from mia.tools.base import ToolRegistry
+from mia.tools.calendar_fetch_tool import build_calendar_fetch_tool
 from mia.tools.calendar_tool import build_calendar_tool
 from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
@@ -64,6 +65,7 @@ def run() -> None:
     anthropic_client = Anthropic(api_key=config.anthropic_api_key)
     registry = ToolRegistry()
     registry.register(build_calendar_tool(calendar_service))
+    registry.register(build_calendar_fetch_tool(calendar_service))
     registry.register(build_gmail_search_tool(gmail_service, anthropic_client))
 
     turn_state = TurnStateMachine()
