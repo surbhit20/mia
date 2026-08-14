@@ -15,8 +15,11 @@ def start_playback(
 
 def is_playback_active() -> bool:
     """True while audio started by start_playback() is still playing."""
-    stream = sd.get_stream()
-    return stream is not None and stream.active
+    try:
+        stream = sd.get_stream()
+    except RuntimeError:
+        return False
+    return stream.active
 
 
 def stop_playback() -> None:

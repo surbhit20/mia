@@ -1,4 +1,4 @@
-from mia.wakeword import WakeWordMatcher
+from mia.wakeword import WakeWordMatcher, is_self_echo
 
 def test_exact_match():
     m = WakeWordMatcher("hey bot")
@@ -43,3 +43,17 @@ def test_threshold_is_configurable():
     text = "yo boat"
     assert lenient.matches(text) is True
     assert strict.matches(text) is False
+
+def test_is_self_echo_detects_fragment_of_spoken_text():
+    spoken = "Your 1:1 with Mia is at 2 PM"
+    assert is_self_echo("your one on one with mia is at 2pm", spoken) is True
+
+def test_is_self_echo_ignores_unrelated_transcript():
+    spoken = "Your 1:1 with Mia is at 2 PM"
+    assert is_self_echo("can you block 30 minutes for focus time", spoken) is False
+
+def test_is_self_echo_threshold_is_configurable():
+    spoken = "Meeting confirmed for 3pm"
+    transcript = "meting confirmd"
+    assert is_self_echo(transcript, spoken, threshold=0.5) is True
+    assert is_self_echo(transcript, spoken, threshold=0.95) is False

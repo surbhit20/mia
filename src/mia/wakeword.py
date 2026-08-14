@@ -37,3 +37,14 @@ class WakeWordMatcher:
             if fuzz.partial_ratio(window, self._wake_word) >= self._threshold_pct:
                 return " ".join(words[:i] + words[i + self._window_size :])
         return " ".join(words)
+
+
+def is_self_echo(transcript: str, spoken_text: str, threshold: float = 0.75) -> bool:
+    """True if `transcript` looks like a fragment of `spoken_text` -- used to
+    filter out mia's own TTS looping back through capture (BlackHole routes
+    injected audio back into what mia captures, by design) rather than being
+    treated as a barge-in attempt or a new command. Reuses the same
+    fuzz.partial_ratio approach as WakeWordMatcher: it finds the best-matching
+    substring of the longer string against the shorter one, which is exactly
+    "does this incoming fragment look like part of what's currently playing"."""
+    return fuzz.partial_ratio(_normalize(transcript), _normalize(spoken_text)) >= threshold * 100

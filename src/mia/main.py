@@ -42,7 +42,7 @@ from mia.tools.calendar_tool import build_calendar_tool
 from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
 from mia.turn_state import TurnState, TurnStateMachine
-from mia.wakeword import WakeWordMatcher
+from mia.wakeword import WakeWordMatcher, is_self_echo
 
 _TOKEN_PATH = Path("~/.mia/token.json").expanduser()
 _SCOPES = [
@@ -139,6 +139,10 @@ def _run_call_loop(
     command_buffer = CommandBuffer()
     vad = FrameVAD(frame_ms=_FRAME_MS)
     history = ConversationHistory()
+    # What mia is currently speaking, so on_transcript can tell her own TTS
+    # looping back through capture (BlackHole routes injected audio back into
+    # what mia captures, by design) apart from a real barge-in (Finding 1).
+    current_speech: list[str | None] = [None]
 
     # NOTE: StreamingSTT (Task 15) dispatches on_transcript from a background
     # listener thread, while the loop below mutates the same turn_state /
@@ -162,6 +166,9 @@ def _run_call_loop(
         with lock:
             if not turn_state.should_process_stt():
                 return
+            if turn_state.current() == TurnState.SPEAKING and current_speech[0] is not None:
+                if is_self_echo(text, current_speech[0]):
+                    return
             if command_buffer.is_capturing():
                 command_buffer.append(text + " ")
                 return
@@ -213,8 +220,8 @@ def _run_call_loop(
                 # SPEAKING (and stopped playback) from on_transcript, on the
                 # STT listener thread -- this only fires for a response that
                 # finished on its own, uninterrupted.
-                if turn_state.current() == TurnState.SPEAKING and not is_playback_active():
-                    with lock:
+                with lock:
+                    if turn_state.current() == TurnState.SPEAKING and not is_playback_active():
                         turn_state.finish_speaking()
 
                 frame = capture.read_frame(frame_ms=_FRAME_MS)
@@ -222,10 +229,13 @@ def _run_call_loop(
                 if turn_state.should_process_stt():
                     stt.send_frame(frame)
 
-                # Called every iteration, gated or not: during a voice turn no
-                # frames are sent at all (self-echo gating), and Deepgram drops
-                # a silent connection after ~10s. This is a no-op while real
-                # audio is flowing.
+                # Called every iteration, gated or not: STT frames are now
+                # blocked only during COMMAND_CAPTURED (the Claude + TTS
+                # generation window), and Deepgram drops a silent connection
+                # after ~10s. This is a no-op except during that window --
+                # self-echo during SPEAKING is handled by content-based
+                # filtering in on_transcript (is_self_echo), not by blocking
+                # STT outright.
                 stt.send_keepalive_if_idle()
 
                 is_speech = vad.is_speech(frame)
@@ -243,8 +253,11 @@ def _run_call_loop(
                             command_text = command_buffer.on_silence()
                             if command_text:
                                 # Move out of LISTENING before the slow work
-                                # below, so the bot's own TTS is never fed to
-                                # the wake-word matcher (self-echo gating).
+                                # below. This blocks STT for the
+                                # Claude+TTS-generation window; self-echo once
+                                # audio starts playing (SPEAKING) is instead
+                                # handled by is_self_echo() filtering in
+                                # on_transcript, not by blocking STT.
                                 turn_state.command_captured()
 
                 if not command_text:
@@ -296,7 +309,8 @@ def _run_call_loop(
                         )
                         with lock:
                             turn_state.start_speaking()
-                        start_playback(audio)
+                            current_speech[0] = result.confirmation
+                            start_playback(audio)
                 except Exception as exc:
                     safe_log(
                         "error",

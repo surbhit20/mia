@@ -52,11 +52,14 @@ raises). The error is still clear and mentions the 401 status, so this
 wrapper does not attempt to paper over it.
 
 Liveness: Deepgram closes an idle live connection server-side, and the main
-loop deliberately stops sending audio for the length of a voice turn (the
-self-echo gate). `send_keepalive_if_idle()` therefore puts a KeepAlive on the
-wire during those gaps, and CLOSE/ERROR handlers plus try/except around every
-socket call make a dead connection visible and non-fatal instead of an
-exception that unwinds the call loop and ejects the bot from the meeting.
+loop stops sending audio only for the COMMAND_CAPTURED portion of a voice
+turn (the Claude + TTS-generation window) -- audio keeps flowing during
+SPEAKING now, since barge-in self-echo is filtered by content
+(`wakeword.is_self_echo`) rather than by blocking STT. `send_keepalive_if_idle()`
+therefore puts a KeepAlive on the wire during that shorter gap, and
+CLOSE/ERROR handlers plus try/except around every socket call make a dead
+connection visible and non-fatal instead of an exception that unwinds the
+call loop and ejects the bot from the meeting.
 """
 
 import threading
@@ -69,11 +72,13 @@ from deepgram.core.events import EventType
 from mia.logging_setup import safe_log
 
 # Deepgram closes a live connection that has received no audio for ~10s. The
-# main loop stops sending frames for the whole of a voice turn (wake word ->
-# Claude -> TTS playback -> cooldown, roughly 7-12s), which is long enough to
-# be dropped mid-turn, so a KeepAlive goes out whenever the stream has been
-# idle for this long. Half the server-side timeout leaves room for a slow
-# iteration.
+# main loop now only stops sending frames for the COMMAND_CAPTURED portion of
+# a voice turn (the Claude-dispatch + TTS-generation window) -- audio keeps
+# flowing during SPEAKING/playback, since self-echo is filtered by content
+# instead. That window alone is short, but a slow Claude call could still
+# approach the server-side timeout, so a KeepAlive goes out whenever the
+# stream has been idle for this long. Half the server-side timeout leaves
+# room for a slow iteration.
 _KEEPALIVE_IDLE_SECONDS = 5.0
 
 # Once disconnected (e.g. the server-side idle timeout fires mid-turn, see

@@ -37,7 +37,7 @@ from mia.tools.calendar_tool import build_calendar_tool
 from mia.tools.gmail_tool import build_gmail_search_tool
 from mia.tts import synthesize
 from mia.turn_state import TurnState, TurnStateMachine
-from mia.wakeword import WakeWordMatcher
+from mia.wakeword import WakeWordMatcher, is_self_echo
 
 _FRAME_MS = 32
 _SILENCE_FRAMES_TO_END_COMMAND = 24
@@ -62,6 +62,10 @@ def run() -> None:
     vad = FrameVAD(frame_ms=_FRAME_MS)
     history = ConversationHistory()
     lock = threading.Lock()
+    # What mia is currently speaking, so on_transcript can tell her own TTS
+    # looping back through capture (BlackHole routes injected audio back into
+    # what mia captures, by design) apart from a real barge-in (Finding 1).
+    current_speech: list[str | None] = [None]
 
     turn_state.wake_word_detected()
 
@@ -74,6 +78,9 @@ def run() -> None:
         with lock:
             if not turn_state.should_process_stt():
                 return
+            if turn_state.current() == TurnState.SPEAKING and current_speech[0] is not None:
+                if is_self_echo(text, current_speech[0]):
+                    return
             if command_buffer.is_capturing():
                 command_buffer.append(text + " ")
                 print(f"  ...captured: {text!r}")
@@ -82,6 +89,8 @@ def run() -> None:
                 # Stopping playback here is what makes this a real barge-in
                 # when the wake word arrives during SPEAKING -- harmless
                 # no-op if nothing is currently playing.
+                if turn_state.current() == TurnState.SPEAKING:
+                    print("  [barge-in] interrupted.\n")
                 stop_playback()
                 turn_state.wake_word_detected()
                 command_buffer.start()
@@ -103,9 +112,10 @@ def run() -> None:
                 # SPEAKING (and stopped playback) from on_transcript, on the
                 # STT listener thread -- this only fires for a response that
                 # finished on its own, uninterrupted.
-                if turn_state.current() == TurnState.SPEAKING and not is_playback_active():
-                    with lock:
+                with lock:
+                    if turn_state.current() == TurnState.SPEAKING and not is_playback_active():
                         turn_state.finish_speaking()
+                        print("  done.\n")
 
                 frame = capture.read_frame(frame_ms=_FRAME_MS)
 
@@ -150,8 +160,8 @@ def run() -> None:
                         audio = synthesize(config.elevenlabs_api_key, result.confirmation)
                         with lock:
                             turn_state.start_speaking()
-                        start_playback(audio, device_name=None)
-                        print("  done.\n")
+                            current_speech[0] = result.confirmation
+                            start_playback(audio, device_name=None)
                 except Exception as exc:
                     print(f"  [error] {exc}")
                     safe_log("error", "voice turn failed", error=str(exc))
