@@ -23,9 +23,20 @@ def _format_event_time(event: dict) -> str:
     if "date" in start:
         return "(all day)"
     if "dateTime" in start:
-        dt = datetime.fromisoformat(start["dateTime"])
+        # The API's returned `dateTime` can carry any offset, including UTC
+        # `Z` for some imported/cross-platform events -- convert to the
+        # system's local timezone before formatting so the spoken time is
+        # what the user actually experiences, not the raw source offset.
+        dt = datetime.fromisoformat(start["dateTime"]).astimezone()
         return f"at {dt.strftime('%-I:%M %p')}"
     return ""
+
+
+def _is_declined(event: dict) -> bool:
+    for attendee in event.get("attendees", []):
+        if attendee.get("self") and attendee.get("responseStatus") == "declined":
+            return True
+    return False
 
 
 def _format_events(events: list[dict]) -> str:
@@ -60,9 +71,12 @@ def build_calendar_fetch_tool(calendar_service) -> Tool:
             )
             .execute()
         )
-        events = response.get("items", [])
+        # Filter out events the user has personally declined before anything
+        # downstream (truncation note, empty-result check) sees the list, so
+        # a range that's all-declined correctly reads as empty.
+        events = [e for e in response.get("items", []) if not _is_declined(e)]
         if not events:
-            return "You're free then — nothing scheduled."
+            return "Nothing scheduled in that time."
 
         message = _format_events(events)
         if response.get("nextPageToken"):
@@ -75,7 +89,11 @@ def build_calendar_fetch_tool(calendar_service) -> Tool:
             "Look up what's on the user's Google Calendar in a given time range, "
             "or check whether they're free at a given time. Use this when the user "
             "asks what's on their schedule, when their next meeting is, or whether "
-            "they're free or busy at a specific time."
+            "they're free or busy at a specific time. For an open-ended question "
+            "like 'when's my next meeting', use a forward-looking range starting "
+            "from the current moment (e.g. the next 7 days) rather than just "
+            "today -- results are returned in chronological order, so the first "
+            "event listed is the next one."
         ),
         input_schema=_SCHEMA,
         handler=handler,

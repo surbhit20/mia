@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import MagicMock
 
 from mia.tools.calendar_fetch_tool import build_calendar_fetch_tool
@@ -33,7 +34,7 @@ def test_handler_returns_free_message_when_no_events():
     tool = build_calendar_fetch_tool(calendar_service)
     result = tool.handler({"start_iso": "2026-08-14T15:00:00-07:00", "end_iso": "2026-08-14T16:00:00-07:00"})
 
-    assert result == "You're free then — nothing scheduled."
+    assert result == "Nothing scheduled in that time."
 
 
 def test_handler_formats_single_event():
@@ -140,3 +141,81 @@ def test_handler_surfaces_calendar_api_error_as_exception():
         assert False, "expected RuntimeError to propagate"
     except RuntimeError:
         pass
+
+
+def test_handler_filters_out_declined_events():
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {"summary": "Standup", "start": {"dateTime": "2026-08-14T09:00:00-07:00"}},
+            {
+                "summary": "Optional Sync",
+                "start": {"dateTime": "2026-08-14T14:00:00-07:00"},
+                "attendees": [
+                    {"email": "someone-else@example.com", "responseStatus": "accepted"},
+                    {"email": "me@example.com", "self": True, "responseStatus": "declined"},
+                ],
+            },
+        ]
+    }
+
+    tool = build_calendar_fetch_tool(calendar_service)
+    result = tool.handler({"start_iso": "2026-08-14T00:00:00-07:00", "end_iso": "2026-08-14T23:59:59-07:00"})
+
+    assert result == "You have 1 event: 'Standup' at 9:00 AM."
+
+
+def test_handler_keeps_event_with_no_attendees_field():
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {"summary": "Standup", "start": {"dateTime": "2026-08-14T09:00:00-07:00"}},
+        ]
+    }
+
+    tool = build_calendar_fetch_tool(calendar_service)
+    result = tool.handler({"start_iso": "2026-08-14T00:00:00-07:00", "end_iso": "2026-08-14T23:59:59-07:00"})
+
+    assert result == "You have 1 event: 'Standup' at 9:00 AM."
+
+
+def test_handler_returns_empty_message_when_all_remaining_events_declined():
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {
+                "summary": "Optional Sync",
+                "start": {"dateTime": "2026-08-14T14:00:00-07:00"},
+                "attendees": [
+                    {"email": "me@example.com", "self": True, "responseStatus": "declined"},
+                ],
+            },
+        ]
+    }
+
+    tool = build_calendar_fetch_tool(calendar_service)
+    result = tool.handler({"start_iso": "2026-08-14T00:00:00-07:00", "end_iso": "2026-08-14T23:59:59-07:00"})
+
+    assert result == "Nothing scheduled in that time."
+
+
+def test_handler_converts_event_time_to_local_timezone():
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {"summary": "Cross-timezone sync", "start": {"dateTime": "2026-08-14T16:00:00Z"}},
+        ]
+    }
+
+    tool = build_calendar_fetch_tool(calendar_service)
+    result = tool.handler({"start_iso": "2026-08-14T00:00:00-07:00", "end_iso": "2026-08-14T23:59:59-07:00"})
+
+    # Compare against the same conversion the implementation is expected to
+    # perform (raw UTC -> local), rather than a hardcoded clock value, so the
+    # test is correct regardless of the host's timezone. On a host whose
+    # local zone happens to be UTC this loses its power to catch a regressed
+    # "forgot .astimezone()" implementation (both would coincidentally agree)
+    # but never produces a false failure.
+    expected_local = datetime.fromisoformat("2026-08-14T16:00:00+00:00").astimezone()
+    expected_str = expected_local.strftime("%-I:%M %p")
+    assert result == f"You have 1 event: 'Cross-timezone sync' at {expected_str}."

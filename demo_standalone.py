@@ -156,18 +156,20 @@ def run() -> None:
 
                 print(f"[command captured] {command_text!r}")
                 try:
-                    print("  dispatching to Claude...")
-                    result = dispatch_command(anthropic_client, registry, command_text, history)
-                    safe_log("info", "command dispatched", tool=result.tool_name)
-
-                    if result.tool_name is None and not wake_word.strip_wake_phrase(
-                        command_text
-                    ):
+                    # Spec: a false trigger must stay silent. If nothing was
+                    # said beyond the wake phrase itself, skip dispatch_command
+                    # entirely so a bare trigger costs no Claude call -- and,
+                    # with conversational memory now in play, so it can't ride
+                    # on prior context and produce an unwanted spoken reply.
+                    if not wake_word.strip_wake_phrase(command_text):
                         print("  (bare wake phrase, staying silent)")
                         safe_log("info", "bare wake phrase ignored")
                         with lock:
                             turn_state.abandon_turn()
                     else:
+                        print("  dispatching to Claude...")
+                        result = dispatch_command(anthropic_client, registry, command_text, history)
+                        safe_log("info", "command dispatched", tool=result.tool_name)
                         print(f"  speaking: {result.confirmation!r}")
                         audio = synthesize(config.elevenlabs_api_key, result.confirmation)
                         with lock:

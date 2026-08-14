@@ -42,7 +42,13 @@ def build_calendar_tool(calendar_service) -> Tool:
 
     return Tool(
         name="block_calendar_slot",
-        description="Create a calendar event to block time on the user's primary calendar.",
+        description=(
+            "Create a calendar event to block time on the user's primary "
+            "calendar. Only use this when the user is asking to schedule or "
+            "block time -- not when they're asking what's already on their "
+            "calendar or whether a time is free; use find_calendar_events for "
+            "those."
+        ),
         input_schema=_SCHEMA,
         handler=handler,
     )
