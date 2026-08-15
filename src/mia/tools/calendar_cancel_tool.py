@@ -1,7 +1,10 @@
-from datetime import datetime
-
 from mia.tools.base import Tool
-from mia.tools.calendar_lookup import find_events_near, format_ambiguous_question
+from mia.tools.calendar_lookup import (
+    find_events_near,
+    format_ambiguous_question,
+    format_candidate,
+    format_not_found,
+)
 
 _SCHEMA = {
     "type": "object",
@@ -15,22 +18,12 @@ _SCHEMA = {
 }
 
 
-def _format_cancel_confirmation(event: dict) -> str:
-    title = event.get("summary", "(untitled event)")
-    start = event.get("start", {})
-    if "dateTime" in start:
-        dt = datetime.fromisoformat(start["dateTime"]).astimezone()
-        return f"Cancelled '{title}' at {dt.strftime('%-I:%M %p')}."
-    return f"Cancelled '{title}'."
-
-
 def build_cancel_calendar_event_tool(calendar_service) -> Tool:
     def handler(args: dict) -> str:
         events = find_events_near(calendar_service, args["time_iso"])
 
         if not events:
-            target_dt = datetime.fromisoformat(args["time_iso"]).astimezone()
-            return f"I couldn't find anything around {target_dt.strftime('%-I:%M %p')}."
+            return format_not_found(args["time_iso"])
 
         if len(events) > 1:
             return format_ambiguous_question(events, args["time_iso"])
@@ -39,7 +32,7 @@ def build_cancel_calendar_event_tool(calendar_service) -> Tool:
         calendar_service.events().delete(
             calendarId="primary", eventId=event["id"], sendUpdates="all"
         ).execute()
-        return _format_cancel_confirmation(event)
+        return f"Cancelled {format_candidate(event)}."
 
     return Tool(
         name="cancel_calendar_event",
@@ -50,7 +43,8 @@ def build_cancel_calendar_event_tool(calendar_service) -> Tool:
             "8601 datetime for time_iso, same convention as block_calendar_slot's "
             "start_iso. Only use this when the user explicitly asks to cancel or "
             "remove an event; use update_calendar_event to move or change one "
-            "instead."
+            "instead. For a recurring event, this only affects the single "
+            "matched occurrence, not the whole series."
         ),
         input_schema=_SCHEMA,
         handler=handler,

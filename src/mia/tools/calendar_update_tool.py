@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from mia.tools.base import Tool
-from mia.tools.calendar_lookup import find_events_near, format_ambiguous_question
+from mia.tools.calendar_lookup import find_events_near, format_ambiguous_question, format_not_found
 
 _SCHEMA = {
     "type": "object",
@@ -36,8 +36,7 @@ def build_update_calendar_event_tool(calendar_service) -> Tool:
         events = find_events_near(calendar_service, args["time_iso"])
 
         if not events:
-            target_dt = datetime.fromisoformat(args["time_iso"]).astimezone()
-            return f"I couldn't find anything around {target_dt.strftime('%-I:%M %p')}."
+            return format_not_found(args["time_iso"])
         if len(events) > 1:
             return format_ambiguous_question(events, args["time_iso"])
 
@@ -61,16 +60,18 @@ def build_update_calendar_event_tool(calendar_service) -> Tool:
         new_time_str = None
 
         if time_changed or duration_changed:
-            if "dateTime" not in original_start:
-                return "I can't change the time on an all-day event yet."
-
+            # original_start["dateTime"] is guaranteed present here: find_events_near
+            # only ever returns events with a timed (non-all-day) start.
             original_start_dt = datetime.fromisoformat(original_start["dateTime"])
             original_end_dt = datetime.fromisoformat(event["end"]["dateTime"])
             original_duration = original_end_dt - original_start_dt
 
-            new_start_dt = (
-                datetime.fromisoformat(new_start_iso) if time_changed else original_start_dt
-            )
+            if time_changed:
+                new_start_dt = datetime.fromisoformat(new_start_iso)
+                if new_start_dt.tzinfo is None:
+                    new_start_dt = new_start_dt.astimezone()
+            else:
+                new_start_dt = original_start_dt
             duration = (
                 timedelta(minutes=new_duration_minutes) if duration_changed else original_duration
             )
@@ -139,7 +140,8 @@ def build_update_calendar_event_tool(calendar_service) -> Tool:
             "block_calendar_slot's start_iso. Only include the fields the user "
             "actually asked to change; leave the rest out. Adding or removing "
             "attendees is not supported. Use cancel_calendar_event to remove an "
-            "event entirely instead of updating it."
+            "event entirely instead of updating it. For a recurring event, this "
+            "only affects the single matched occurrence, not the whole series."
         ),
         input_schema=_SCHEMA,
         handler=handler,

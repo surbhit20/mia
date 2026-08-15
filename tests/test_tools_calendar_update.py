@@ -192,7 +192,11 @@ def test_handler_moves_and_renames_together():
     assert result == "Moved 'Standup' to 9:30 AM and renamed it to 'Budget review'."
 
 
-def test_handler_rejects_time_change_on_all_day_event():
+def test_handler_treats_all_day_event_as_no_match():
+    # find_events_near excludes all-day events (they can overlap the query
+    # window via Google's overlap semantics without actually starting near
+    # the target time), so the handler should report "not found" rather than
+    # finding and then rejecting a time change on the all-day event.
     calendar_service = _service_with_event({
         "id": "evt1", "summary": "Company Holiday",
         "start": {"date": "2026-08-14"},
@@ -205,26 +209,8 @@ def test_handler_rejects_time_change_on_all_day_event():
         "new_start_iso": "2026-08-15T16:00:00-07:00",
     })
 
-    assert result == "I can't change the time on an all-day event yet."
+    assert result == "I couldn't find anything around 4:00 PM."
     calendar_service.events.return_value.patch.assert_not_called()
-
-
-def test_handler_allows_title_change_on_all_day_event():
-    calendar_service = _service_with_event({
-        "id": "evt1", "summary": "Company Holiday",
-        "start": {"date": "2026-08-14"},
-        "end": {"date": "2026-08-15"},
-    })
-
-    tool = build_update_calendar_event_tool(calendar_service)
-    result = tool.handler({
-        "time_iso": "2026-08-14T16:00:00-07:00",
-        "new_title": "Office Closed",
-    })
-
-    _, kwargs = calendar_service.events.return_value.patch.call_args
-    assert kwargs["body"] == {"summary": "Office Closed"}
-    assert result == "Renamed 'Company Holiday' to 'Office Closed'."
 
 
 def test_handler_surfaces_calendar_api_error_as_exception():
