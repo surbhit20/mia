@@ -48,7 +48,7 @@ def build_update_calendar_event_tool(calendar_service) -> Tool:
         new_title = args.get("new_title")
         new_description = args.get("new_description")
 
-        if not any([new_start_iso, new_duration_minutes, new_title, new_description]):
+        if all(v is None for v in (new_start_iso, new_duration_minutes, new_title, new_description)):
             return "Nothing to change."
 
         time_changed = new_start_iso is not None

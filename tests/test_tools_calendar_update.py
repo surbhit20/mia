@@ -157,6 +157,24 @@ def test_handler_changes_description_only():
     assert result == "Updated the description for 'Standup'."
 
 
+def test_handler_accepts_empty_string_description():
+    calendar_service = _service_with_event({
+        "id": "evt1", "summary": "Standup",
+        "start": {"dateTime": "2026-08-14T16:00:00-07:00"},
+        "end": {"dateTime": "2026-08-14T16:30:00-07:00"},
+    })
+
+    tool = build_update_calendar_event_tool(calendar_service)
+    result = tool.handler({
+        "time_iso": "2026-08-14T16:00:00-07:00",
+        "new_description": "",
+    })
+
+    _, kwargs = calendar_service.events.return_value.patch.call_args
+    assert kwargs["body"] == {"description": ""}
+    assert result == "Updated the description for 'Standup'."
+
+
 def test_handler_moves_and_renames_together():
     calendar_service = _service_with_event({
         "id": "evt1", "summary": "Standup",
