@@ -3,6 +3,7 @@ from mia.tools.calendar_lookup import (
     format_ambiguous_question,
     format_candidate,
     format_event_time,
+    format_not_found,
     is_declined,
 )
 from unittest.mock import MagicMock
@@ -42,6 +43,7 @@ def test_find_events_near_queries_widened_window():
         timeMax="2026-08-14T16:15:00-07:00",
         singleEvents=True,
         orderBy="startTime",
+        maxResults=5,
     )
 
 
@@ -57,6 +59,7 @@ def test_find_events_near_respects_custom_window():
         timeMax="2026-08-14T16:05:00-07:00",
         singleEvents=True,
         orderBy="startTime",
+        maxResults=5,
     )
 
 
@@ -89,6 +92,38 @@ def test_find_events_near_returns_empty_list_when_no_events():
     assert result == []
 
 
+def test_find_events_near_excludes_all_day_event_despite_overlap():
+    # Google's timeMin/timeMax match on overlap, so an all-day event spanning
+    # the whole day comes back from .list() even though it doesn't "start"
+    # anywhere near the target time. find_events_near must filter it out.
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {"summary": "Team Offsite", "start": {"date": "2026-08-14"}},
+        ]
+    }
+
+    result = find_events_near(calendar_service, "2026-08-14T16:00:00-07:00")
+
+    assert result == []
+
+
+def test_find_events_near_excludes_timed_event_starting_outside_window():
+    # A long-running event that started well before the target and is still
+    # in progress overlaps the query window (Google's overlap semantics) but
+    # doesn't actually start near the target time, so it should be excluded.
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {"summary": "All-Hands", "start": {"dateTime": "2026-08-14T14:00:00-07:00"}},
+        ]
+    }
+
+    result = find_events_near(calendar_service, "2026-08-14T16:00:00-07:00")
+
+    assert result == []
+
+
 def test_format_event_time_returns_time_string_for_timed_event():
     event = {"start": {"dateTime": "2026-08-14T16:00:00-07:00"}}
     assert format_event_time(event) == "4:00 PM"
@@ -112,6 +147,10 @@ def test_format_candidate_omits_time_for_all_day_event():
 def test_format_candidate_uses_untitled_fallback():
     event = {"start": {"dateTime": "2026-08-14T16:00:00-07:00"}}
     assert format_candidate(event) == "'(untitled event)' at 4:00 PM"
+
+
+def test_format_not_found_includes_target_time():
+    assert format_not_found("2026-08-14T16:00:00-07:00") == "I couldn't find anything around 4:00 PM."
 
 
 def test_format_ambiguous_question_two_candidates():
