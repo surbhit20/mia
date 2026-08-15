@@ -1,0 +1,101 @@
+# One-time setup (macOS)
+
+Run `./setup_audio.sh` first, then complete these manual steps — none of
+this can be scripted.
+
+## 0. Install `mia`
+
+```sh
+pip install -e ".[dev]"     # runtime + test dependencies
+playwright install chromium # the browser JoinWorker drives
+cp .env.example .env        # then fill in your keys (see step 5)
+```
+
+`mia` runs as a long-lived foreground process:
+
+```sh
+python -m mia.main
+```
+
+## 1. Audio MIDI Setup routing
+
+1. Open **Audio MIDI Setup** (Spotlight search).
+2. Click **+** (bottom left) → **Create Multi-Output Device**.
+3. Check both your normal speakers and **BlackHole 2ch**.
+4. This routes call audio to both your ears and to BlackHole (which `mia`
+   captures from).
+
+**Warning:** do not set this Multi-Output Device as your Mac's system-wide
+default output — every system sound (Slack pings, email notifications)
+would leak into the call. Only select it as the output *inside Meet's own
+in-call settings* (next step). If your macOS version supports per-app audio
+output routing (Sonoma+), prefer that instead; otherwise mute other
+notification sounds while `mia` is running.
+
+## 2. Bot account login and device selection (one time, in Chromium)
+
+1. Run `python3 -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('$HOME/.mia/chrome-profile', headless=False, channel='chrome'); input('press enter when done'); b.close()"`.
+   (`channel='chrome'` uses your real, locally-installed Google Chrome
+   instead of Playwright's bundled Chromium — Google's sign-in flow
+   detects and blocks the bundled one outright. Requires Google Chrome to
+   already be installed. Use `$HOME`, not `~` — `~` is not expanded inside
+   this quoted string and will silently create the profile in the wrong
+   place.)
+2. **Do not sign in from this automated window** — Google also blocks
+   sign-in for any Chrome instance launched with extra command-line flags
+   (including a plain `--user-data-dir`), automation or not. Instead: open
+   Chrome normally (double-click the app, no terminal), use its native
+   **profile switcher → Add Chrome Profile** to create and sign into a
+   separate profile as the bot account, and do the Meet call / device
+   selection (step 3 below) in *that* window. Then quit Chrome and copy
+   that profile's data into `~/.mia/chrome-profile` before running the
+   command above again (which will now just reuse the already-signed-in
+   session instead of hitting the sign-in flow at all).
+3. Join any Meet call, open in-call device settings, and select
+   **BlackHole 2ch** as both the microphone and speaker.
+4. Press enter in the terminal to close — this profile is reused on every
+   future run, so this is a one-time step.
+
+## 3. Automation permission
+
+The first time `mia` runs `tab_detector.py`, macOS will prompt to allow
+Terminal (or whichever app runs `mia`) to control Google Chrome via
+Automation. Click **OK**. If missed, grant it manually under
+**System Settings → Privacy & Security → Automation**.
+
+## 4. Google Calendar + Gmail OAuth
+
+Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env` (from a Google
+Cloud project with both the **Calendar API** and the **Gmail API**
+enabled — `gmail.readonly` is a restricted scope, so it must also be
+listed under the OAuth consent screen's scopes). Then start `mia`
+(`python -m mia.main`) once: it opens the OAuth consent flow in a browser
+(now asking for both Calendar and Gmail read access) and stores the
+resulting refresh token at `~/.mia/token.json`.
+
+If you're upgrading from a version of `mia` that only requested Calendar
+access, delete the cached token once (`rm -f ~/.mia/token.json`) so the
+next run re-consents with the full scope list — `mia` also detects this
+automatically and re-prompts (see `_authorize_google` in `main.py`), but
+deleting it manually avoids relying on that check.
+
+## 5. Environment variables
+
+`python -m mia.main` loads `.env` from the working directory at startup
+(real exported environment variables take precedence).
+
+Required — the process refuses to start without them:
+
+- `DEEPGRAM_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `ELEVENLABS_API_KEY`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+
+Optional:
+
+- `LOGFIRE_TOKEN` — enables Logfire reporting. Leave it unset and `mia`
+  runs normally with reporting disabled; Logfire is never required for
+  correctness.
+- `WAKE_WORD` — defaults to `hey mia`.
+- `FUZZY_THRESHOLD` — wake-word match threshold, defaults to `0.75`.
