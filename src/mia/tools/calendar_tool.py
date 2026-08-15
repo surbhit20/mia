@@ -47,7 +47,8 @@ def build_calendar_tool(calendar_service) -> Tool:
             "calendar. Only use this when the user is asking to schedule or "
             "block time -- not when they're asking what's already on their "
             "calendar or whether a time is free; use find_calendar_events for "
-            "those."
+            "those. And not when they want to change an event that already "
+            "exists -- use update_calendar_event for that."
         ),
         input_schema=_SCHEMA,
         handler=handler,

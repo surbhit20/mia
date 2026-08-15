@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from mia.tools.base import Tool
+from mia.tools.calendar_lookup import is_declined
 
 _SCHEMA = {
     "type": "object",
@@ -30,13 +31,6 @@ def _format_event_time(event: dict) -> str:
         dt = datetime.fromisoformat(start["dateTime"]).astimezone()
         return f"at {dt.strftime('%-I:%M %p')}"
     return ""
-
-
-def _is_declined(event: dict) -> bool:
-    for attendee in event.get("attendees", []):
-        if attendee.get("self") and attendee.get("responseStatus") == "declined":
-            return True
-    return False
 
 
 def _format_events(events: list[dict]) -> str:
@@ -74,7 +68,7 @@ def build_calendar_fetch_tool(calendar_service) -> Tool:
         # Filter out events the user has personally declined before anything
         # downstream (truncation note, empty-result check) sees the list, so
         # a range that's all-declined correctly reads as empty.
-        events = [e for e in response.get("items", []) if not _is_declined(e)]
+        events = [e for e in response.get("items", []) if not is_declined(e)]
         if not events:
             return "Nothing scheduled in that time."
 
