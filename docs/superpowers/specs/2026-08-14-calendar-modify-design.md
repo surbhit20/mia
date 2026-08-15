@@ -28,11 +28,18 @@ holds that shared logic so it's written and tested once:
 - `find_events_near(calendar_service, target_iso, window_minutes=15) ->
   list[dict]`: queries `calendar_service.events().list(calendarId="primary",
   timeMin=target-window, timeMax=target+window, singleEvents=True,
-  orderBy="startTime")`, filters out the user's own declined events, and
-  returns whatever's left, in chronological order.
+  orderBy="startTime", maxResults=5)`, filters out the user's own declined
+  events, **and further filters to events whose own `start.dateTime`
+  actually falls within `[target-window, target+window]`** -- not just
+  whatever Google's overlap-based `timeMin`/`timeMax` query happens to
+  return -- before returning what's left, in chronological order. See
+  "All-day events" below for why this second filter exists.
 - `is_declined(event: dict) -> bool`: moved here from
   `calendar_fetch_tool.py` (currently a private `_is_declined`), which
   switches to importing it from here instead of keeping its own copy.
+- `format_not_found(target_iso: str) -> str`: shared `"I couldn't find
+  anything around {time}."` message, used by both mutation tools instead
+  of each duplicating the formatting inline.
 
 **Match handling**, done identically in both tools' handlers:
 - **Zero matches** → `"I couldn't find anything around {time}."` No
@@ -103,13 +110,28 @@ change, and omit the rest.
    {new_duration} minutes."`; title/description-only changes are named
    directly without a time clause.
 
-**All-day events**: the matched event's `start` field carries `date`
-instead of `dateTime` for all-day events, so there's no `dateTime` to
-compute a duration from. If `new_start_iso` or `new_duration_minutes` is
-given and the matched event is all-day, return `"I can't change the time
-on an all-day event yet."` without patching. `new_title` /
-`new_description` changes still work normally on an all-day event, since
-neither needs duration math.
+**All-day events**: out of scope entirely, for both `cancel_calendar_event`
+and `update_calendar_event`. All-day events cannot be found via `time_iso`
+lookup at all: Google's `timeMin`/`timeMax` on `events().list()` match on
+overlap (`timeMin` bounds an event's end, `timeMax` bounds its start), not
+on whether the event's own start falls in that range, so an all-day event
+spanning the whole day can come back as a "match" for a spoken time
+nowhere near anything the user meant. That overlap-based query can't
+distinguish "an all-day event overlaps this time" from "a timed event
+starts at this time," and matching on overlap risks silently acting on
+the wrong event -- for `cancel_calendar_event` in particular, silently
+deleting one. `find_events_near` therefore filters to events with a
+`start.dateTime` inside the window, unconditionally excluding anything
+with only a `start.date` (all-day events). The original design allowed
+`new_title` / `new_description` changes on an all-day event; that
+capability was removed as the cost of closing this bug, since there's no
+way to keep it without reintroducing overlap-based matching.
+
+This was discovered during a final whole-branch review after initial
+implementation -- each task's own tests only ever exercised small,
+pre-curated mock lists, never a realistic mixed calendar where a
+long-running or all-day event could overlap a query window without
+actually starting in it -- not caught at design time.
 
 **Auth**: no new OAuth scope. `calendar.events` already grants full
 read/write access to events (not read-only), the same reasoning already
@@ -130,8 +152,15 @@ Same TDD pattern as the existing calendar tools: mock `calendar_service`.
 
 For `calendar_lookup.py`:
 - `find_events_near` queries with the correct widened `timeMin`/`timeMax`
-  window around the target time.
+  window around the target time, capped with `maxResults=5`.
 - Declined events are filtered out of the result.
+- An all-day event returned by the query (via Google's overlap semantics)
+  is excluded from the result.
+- A timed event whose `start.dateTime` is outside the `±window` (e.g. a
+  long event still running from well before the target) is excluded from
+  the result, even though the query itself would return it.
+- `format_not_found` produces the correct message for a given target
+  time.
 
 For `cancel_calendar_event`:
 - Zero matches → correct message, `delete()` not called.
@@ -153,11 +182,11 @@ For `update_calendar_event`:
   that field, no start/end.
 - One match, no optional fields given → `"Nothing to change."`, `patch()`
   not called.
-- One match, all-day event, time/duration field given → the all-day
-  error message, `patch()` not called.
-- One match, all-day event, only `new_title`/`new_description` given →
-  patches normally.
 - Confirmation message wording for each of the above combinations.
+
+Since `find_events_near` never returns an all-day event (see "All-day
+events" above), neither tool has an all-day-specific code path to test
+anymore; the "single match" case for both tools is always a timed event.
 
 ## Explicit scope
 
@@ -169,7 +198,8 @@ lookup with disambiguation, attendee notifications on for both.
 name-to-email resolution design), title-based (rather than time-based)
 event lookup, recurring-event series-level edits (only the matched
 single instance is affected, consistent with `find_calendar_events`'s
-`singleEvents=True` treatment), all-day event time/duration changes
-(title/description changes on all-day events are in scope), a
-no-wake-word clarification reply flow (every command, including
-disambiguation follow-ups, stays wake-word-gated).
+`singleEvents=True` treatment), all-day events entirely for both tools
+(see "All-day events" above — discovered post-implementation that
+time-window matching can't safely reach them at all, not just their
+time/duration), a no-wake-word clarification reply flow (every command,
+including disambiguation follow-ups, stays wake-word-gated).
