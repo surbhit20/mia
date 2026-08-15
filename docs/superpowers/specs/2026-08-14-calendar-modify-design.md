@@ -28,12 +28,15 @@ holds that shared logic so it's written and tested once:
 - `find_events_near(calendar_service, target_iso, window_minutes=15) ->
   list[dict]`: queries `calendar_service.events().list(calendarId="primary",
   timeMin=target-window, timeMax=target+window, singleEvents=True,
-  orderBy="startTime", maxResults=5)`, filters out the user's own declined
-  events, **and further filters to events whose own `start.dateTime`
-  actually falls within `[target-window, target+window]`** -- not just
-  whatever Google's overlap-based `timeMin`/`timeMax` query happens to
-  return -- before returning what's left, in chronological order. See
-  "All-day events" below for why this second filter exists.
+  orderBy="startTime")`, filters out the user's own declined events, **and
+  further filters to events whose own `start.dateTime` actually falls within
+  `[target-window, target+window]`** -- not just whatever Google's
+  overlap-based `timeMin`/`timeMax` query happens to return -- then returns
+  at most 5 filtered results in chronological order. The cap is applied to
+  the final filtered list (events the user actually meant), not the raw API
+  response (which may contain all-day events, declined meetings, and old
+  overlaps the user didn't ask for). See "All-day events" below for why the
+  start-time filter exists.
 - `is_declined(event: dict) -> bool`: moved here from
   `calendar_fetch_tool.py` (currently a private `_is_declined`), which
   switches to importing it from here instead of keeping its own copy.
@@ -152,13 +155,16 @@ Same TDD pattern as the existing calendar tools: mock `calendar_service`.
 
 For `calendar_lookup.py`:
 - `find_events_near` queries with the correct widened `timeMin`/`timeMax`
-  window around the target time, capped with `maxResults=5`.
+  window around the target time, without a server-side result cap.
 - Declined events are filtered out of the result.
 - An all-day event returned by the query (via Google's overlap semantics)
   is excluded from the result.
 - A timed event whose `start.dateTime` is outside the `±window` (e.g. a
   long event still running from well before the target) is excluded from
   the result, even though the query itself would return it.
+- The final filtered result is capped at 5 items (applied after all
+  filtering, not on the raw response), ensuring real matches aren't lost
+  when the raw response contains many all-day/declined/overlapping events.
 - `format_not_found` produces the correct message for a given target
   time.
 

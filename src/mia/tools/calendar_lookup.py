@@ -24,7 +24,6 @@ def find_events_near(calendar_service, target_iso: str, window_minutes: int = 15
             timeMax=window_end.isoformat(),
             singleEvents=True,
             orderBy="startTime",
-            maxResults=5,
         )
         .execute()
     )
@@ -43,7 +42,7 @@ def find_events_near(calendar_service, target_iso: str, window_minutes: int = 15
         start_dt = datetime.fromisoformat(start_dt_str)
         if window_start <= start_dt <= window_end:
             events.append(e)
-    return events
+    return events[:5]
 
 
 def format_event_time(event: dict) -> str | None:

@@ -43,7 +43,6 @@ def test_find_events_near_queries_widened_window():
         timeMax="2026-08-14T16:15:00-07:00",
         singleEvents=True,
         orderBy="startTime",
-        maxResults=5,
     )
 
 
@@ -59,7 +58,6 @@ def test_find_events_near_respects_custom_window():
         timeMax="2026-08-14T16:05:00-07:00",
         singleEvents=True,
         orderBy="startTime",
-        maxResults=5,
     )
 
 
@@ -122,6 +120,64 @@ def test_find_events_near_excludes_timed_event_starting_outside_window():
     result = find_events_near(calendar_service, "2026-08-14T16:00:00-07:00")
 
     assert result == []
+
+
+def test_find_events_near_caps_filtered_results_at_five():
+    # Verifies that maxResults cap is applied to filtered results, not raw API response.
+    # When API returns 6+ events that all pass filtering, only 5 should be returned.
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {"summary": "Event 1", "start": {"dateTime": "2026-08-14T15:50:00-07:00"}},
+            {"summary": "Event 2", "start": {"dateTime": "2026-08-14T15:52:00-07:00"}},
+            {"summary": "Event 3", "start": {"dateTime": "2026-08-14T15:54:00-07:00"}},
+            {"summary": "Event 4", "start": {"dateTime": "2026-08-14T15:56:00-07:00"}},
+            {"summary": "Event 5", "start": {"dateTime": "2026-08-14T15:58:00-07:00"}},
+            {"summary": "Event 6", "start": {"dateTime": "2026-08-14T16:00:00-07:00"}},
+            {"summary": "Event 7", "start": {"dateTime": "2026-08-14T16:02:00-07:00"}},
+        ]
+    }
+
+    result = find_events_near(calendar_service, "2026-08-14T16:00:00-07:00")
+
+    assert len(result) == 5
+    assert [e["summary"] for e in result] == [
+        "Event 1",
+        "Event 2",
+        "Event 3",
+        "Event 4",
+        "Event 5",
+    ]
+
+
+def test_find_events_near_does_not_lose_real_match_when_raw_response_truncated():
+    # Reproduces original bug scenario: 5 items that get filtered out (all-day/declined/out-of-window)
+    # plus 1 real timed in-window match. Under the old server-side-cap behavior, the 5 non-matching
+    # items would consume the cap before filtering, and the real match would be lost.
+    # With the fix, the real match is found despite being past item 5 in the raw response.
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {"summary": "All-day Offsite", "start": {"date": "2026-08-14"}},  # Filtered: all-day
+            {
+                "summary": "Declined Meeting",
+                "start": {"dateTime": "2026-08-14T15:50:00-07:00"},
+                "attendees": [
+                    {"email": "me@example.com", "self": True, "responseStatus": "declined"},
+                ],
+            },  # Filtered: declined
+            {"summary": "Old Event", "start": {"dateTime": "2026-08-14T14:00:00-07:00"}},  # Filtered: out-of-window
+            {"summary": "Another All-day", "start": {"date": "2026-08-14"}},  # Filtered: all-day
+            {"summary": "Another Declined", "start": {"dateTime": "2026-08-14T15:48:00-07:00"},
+             "attendees": [{"email": "me@example.com", "self": True, "responseStatus": "declined"}]},  # Filtered: declined
+            {"summary": "Real Match", "start": {"dateTime": "2026-08-14T16:00:00-07:00"}},  # NOT filtered
+        ]
+    }
+
+    result = find_events_near(calendar_service, "2026-08-14T16:00:00-07:00")
+
+    assert len(result) == 1
+    assert result[0]["summary"] == "Real Match"
 
 
 def test_format_event_time_returns_time_string_for_timed_event():
