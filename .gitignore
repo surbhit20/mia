@@ -1,6 +1,12 @@
 .worktrees/
 .superpowers/
 
+# Claude Code local state (worktrees, personal settings, lock files)
+.claude/
+
+# macOS
+.DS_Store
+
 # Python
 __pycache__/
 *.pyc
