@@ -5,8 +5,29 @@ import websockets
 
 from mia.audio.recall_framing import FrameBuffer, extract_mixed_audio_chunk
 
-_READ_TIMEOUT_MULTIPLIER = 2
 _BYTES_PER_SAMPLE = 2  # 16-bit PCM
+
+# How long a read waits for real audio before giving up and returning
+# silence.
+#
+# This is deliberately NOT derived from frame_ms. Recall delivers audio in
+# ~200ms batches, so a frame-sized timeout (32ms frame -> 64ms) expires
+# between every batch: the buffer runs dry, pull() substitutes silence, and
+# that fabricated silence is fed to Deepgram *inside* live speech. Measured
+# at ~44% of all frames during continuous talking, which chopped words apart
+# and made the wake word register about one attempt in seven.
+#
+# BlackHoleCapture, which this replaced, could never do that -- a hardware
+# input stream is paced by the sound card and cannot return a frame before
+# that frame's audio has physically elapsed. Reading from a network buffer
+# has no such pacing, so the timeout has to supply it.
+#
+# 0.5s clears Recall's ~200ms cadence plus jitter with room to spare, which
+# demotes padding back to what it should be: an emergency fallback for a
+# stalled or dead stream, not a routine occurrence. When audio genuinely
+# stops the loop simply iterates more slowly, which is correct -- there is
+# nothing to process.
+_STARVATION_TIMEOUT_SECONDS = 0.5
 
 
 class RecallAudioBridge:
@@ -112,5 +133,4 @@ class RecallAudioBridge:
 
     def read_frame(self, frame_ms: int = 30) -> bytes:
         num_bytes = int(self._sample_rate * frame_ms / 1000) * _BYTES_PER_SAMPLE
-        timeout_seconds = (frame_ms * _READ_TIMEOUT_MULTIPLIER) / 1000
-        return self._frame_buffer.pull(num_bytes, timeout_seconds)
+        return self._frame_buffer.pull(num_bytes, _STARVATION_TIMEOUT_SECONDS)
