@@ -152,8 +152,11 @@ def _run_call_loop(
     vad = FrameVAD(frame_ms=_FRAME_MS)
     history = ConversationHistory()
     # What mia is currently speaking, so on_transcript can tell her own TTS
-    # looping back through capture (BlackHole routes injected audio back into
-    # what mia captures, by design) apart from a real barge-in (Finding 1).
+    # apart from a real barge-in via content-based comparison (is_self_echo).
+    # Whether Attendee's realtime_audio.mixed stream includes mia's own
+    # bot_output audio is unverified as of this branch -- if it does, this
+    # filtering is still load-bearing; if it doesn't, it's a harmless no-op.
+    # Confirm during live testing.
     current_speech: list[str | None] = [None]
 
     # NOTE: StreamingSTT (Task 15) dispatches on_transcript from a background
@@ -372,54 +375,80 @@ def _handle_join(
     meet_url: str,
 ) -> None:
     websocket_url = f"ws://host.docker.internal:{config.attendee_websocket_port}/audio"
-    with AttendeeAudioBridge(port=config.attendee_websocket_port) as bridge:
-        try:
-            bot_id = attendee_client.create_bot(
-                base_url=config.attendee_base_url,
-                api_key=config.attendee_api_key,
-                meeting_url=meet_url,
-                websocket_url=websocket_url,
-                bot_name=config.attendee_bot_name,
-            )
-            attendee_client.wait_until_joined(
-                base_url=config.attendee_base_url,
-                api_key=config.attendee_api_key,
-                bot_id=bot_id,
-            )
-        except Exception as exc:
-            # Spec ("Can't join"): log and skip; detection keeps running.
-            # Leave the URL marked "skipped" so the next poll doesn't
-            # immediately re-prompt for the same failing call.
-            safe_log("error", "join failed", meeting_url=meet_url, error=str(exc))
-            state.set_status(meet_url, "skipped")
-            return
-
-        try:
-            attendee_client.set_avatar_image(
-                base_url=config.attendee_base_url,
-                api_key=config.attendee_api_key,
-                bot_id=bot_id,
-                image_path=_BOT_AVATAR_PATH,
-            )
-        except Exception as exc:
-            safe_log("warning", "avatar image failed", meeting_url=meet_url, error=str(exc))
-
-        safe_log("info", "joined meeting", meeting_url=meet_url)
-        try:
-            _run_call_loop(config, registry, anthropic_client, meet_url, bridge, bot_id)
-        except Exception as exc:
-            safe_log("error", "call loop failed", meeting_url=meet_url, error=str(exc))
-        finally:
+    try:
+        with AttendeeAudioBridge(port=config.attendee_websocket_port) as bridge:
+            bot_id = None
             try:
-                attendee_client.leave(
+                bot_id = attendee_client.create_bot(
+                    base_url=config.attendee_base_url,
+                    api_key=config.attendee_api_key,
+                    meeting_url=meet_url,
+                    websocket_url=websocket_url,
+                    bot_name=config.attendee_bot_name,
+                )
+                attendee_client.wait_until_joined(
                     base_url=config.attendee_base_url,
                     api_key=config.attendee_api_key,
                     bot_id=bot_id,
                 )
             except Exception as exc:
-                safe_log("error", "leave failed", meeting_url=meet_url, error=str(exc))
-            state.clear(meet_url)
-            safe_log("info", "left meeting", meeting_url=meet_url)
+                # Spec ("Can't join"): log and skip; detection keeps running.
+                # Leave the URL marked "skipped" so the next poll doesn't
+                # immediately re-prompt for the same failing call.
+                safe_log("error", "join failed", meeting_url=meet_url, error=str(exc))
+                state.set_status(meet_url, "skipped")
+                # create_bot() may have succeeded before wait_until_joined()
+                # failed -- a real bot can then finish joining after we've
+                # already given up on it, and would otherwise sit in the
+                # meeting orphaned and undriven. Best-effort clean it up.
+                if bot_id is not None:
+                    try:
+                        attendee_client.leave(
+                            base_url=config.attendee_base_url,
+                            api_key=config.attendee_api_key,
+                            bot_id=bot_id,
+                        )
+                    except Exception as leave_exc:
+                        safe_log(
+                            "error", "leave failed", meeting_url=meet_url, error=str(leave_exc)
+                        )
+                return
+
+            try:
+                attendee_client.set_avatar_image(
+                    base_url=config.attendee_base_url,
+                    api_key=config.attendee_api_key,
+                    bot_id=bot_id,
+                    image_path=_BOT_AVATAR_PATH,
+                )
+            except Exception as exc:
+                safe_log("warning", "avatar image failed", meeting_url=meet_url, error=str(exc))
+
+            safe_log("info", "joined meeting", meeting_url=meet_url)
+            try:
+                _run_call_loop(config, registry, anthropic_client, meet_url, bridge, bot_id)
+            except Exception as exc:
+                safe_log("error", "call loop failed", meeting_url=meet_url, error=str(exc))
+            finally:
+                try:
+                    attendee_client.leave(
+                        base_url=config.attendee_base_url,
+                        api_key=config.attendee_api_key,
+                        bot_id=bot_id,
+                    )
+                except Exception as exc:
+                    safe_log("error", "leave failed", meeting_url=meet_url, error=str(exc))
+                state.clear(meet_url)
+                safe_log("info", "left meeting", meeting_url=meet_url)
+    except Exception as exc:
+        # AttendeeAudioBridge.__enter__ itself failed (e.g. the websocket
+        # port is already bound by a leftover process). The caller in run()
+        # already marked this URL "joined" before invoking us, and nothing
+        # inside the `with` block ran to correct that -- without this,
+        # the URL would stay stuck "joined" until StateStore's TTL expires,
+        # and trigger.decide() would refuse to ever re-prompt for it.
+        safe_log("error", "join failed", meeting_url=meet_url, error=str(exc))
+        state.set_status(meet_url, "skipped")
 
 
 def run() -> None:
