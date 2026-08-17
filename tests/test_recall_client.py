@@ -27,6 +27,7 @@ def test_create_bot_posts_correct_payload_and_returns_id(mock_post):
             "meeting_url": "https://meet.google.com/xyz",
             "bot_name": "Mia",
             "recording_config": {
+                "audio_mixed_raw": {},
                 "realtime_endpoints": [
                     {"type": "websocket", "url": "wss://example.ngrok.app/audio", "events": ["audio_mixed_raw.data"]},
                 ],
@@ -152,3 +153,23 @@ def test_leave_posts_to_leave_call_endpoint(mock_post):
         headers={"Authorization": "Token test-key"},
         timeout=15,
     )
+
+
+@patch("mia.recall_client.requests.post")
+def test_create_bot_error_includes_recall_response_body(mock_post):
+    # Recall explains rejections in the body, not the status line. Losing it
+    # turned a real 400 into a bare "join failed" in the logs.
+    mock_post.return_value = MagicMock(
+        status_code=400,
+        url="https://us-west-2.recall.ai/api/v1/bot/",
+        text='{"recording_config":{"non_field_errors":["Cannot specify realtime endpoint events for artifacts that are not configured: audio_mixed_raw"]}}',
+    )
+
+    with pytest.raises(Exception, match="artifacts that are not configured"):
+        create_bot(
+            base_url="https://us-west-2.recall.ai",
+            api_key="test-key",
+            meeting_url="https://meet.google.com/xyz",
+            websocket_url="wss://example.ngrok.app/audio",
+            bot_name="Mia",
+        )

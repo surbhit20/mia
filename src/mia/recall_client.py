@@ -7,6 +7,23 @@ _TERMINAL_FAILURE_STATES = {"call_ended", "fatal"}
 _SUCCESS_STATE = "in_call_recording"
 
 
+def _raise_for_status(response: requests.Response) -> None:
+    """raise_for_status() that keeps the response body.
+
+    Recall explains rejections in the body, not the status line, and the
+    stock exception drops it -- a real 400 ("Cannot specify realtime
+    endpoint events for artifacts that are not configured") surfaced in
+    mia's logs as a bare "join failed", which took a manual API replay to
+    diagnose.
+    """
+    if response.status_code < 400:
+        return
+    raise requests.HTTPError(
+        f"{response.status_code} from {response.url}: {response.text[:500]}",
+        response=response,
+    )
+
+
 def create_bot(base_url: str, api_key: str, meeting_url: str, websocket_url: str, bot_name: str) -> str:
     response = requests.post(
         f"{base_url}/api/v1/bot/",
@@ -15,6 +32,11 @@ def create_bot(base_url: str, api_key: str, meeting_url: str, websocket_url: str
             "meeting_url": meeting_url,
             "bot_name": bot_name,
             "recording_config": {
+                # Declaring the artifact is required, not redundant with the
+                # endpoint below: referencing audio_mixed_raw.data without
+                # this key is rejected with "Cannot specify realtime endpoint
+                # events for artifacts that are not configured".
+                "audio_mixed_raw": {},
                 "realtime_endpoints": [
                     {"type": "websocket", "url": websocket_url, "events": ["audio_mixed_raw.data"]},
                 ],
@@ -22,7 +44,7 @@ def create_bot(base_url: str, api_key: str, meeting_url: str, websocket_url: str
         },
         timeout=30,
     )
-    response.raise_for_status()
+    _raise_for_status(response)
     return response.json()["id"]
 
 
@@ -36,7 +58,7 @@ def bot_state(base_url: str, api_key: str, bot_id: str, timeout_seconds: float =
         headers={"Authorization": f"Token {api_key}"},
         timeout=timeout_seconds,
     )
-    response.raise_for_status()
+    _raise_for_status(response)
     status_changes = response.json().get("status_changes", [])
     if not status_changes:
         return ""
@@ -68,7 +90,7 @@ def speak(base_url: str, api_key: str, bot_id: str, mp3_bytes: bytes) -> None:
         json={"kind": "mp3", "b64_data": base64.b64encode(mp3_bytes).decode("ascii")},
         timeout=30,
     )
-    response.raise_for_status()
+    _raise_for_status(response)
 
 
 def leave(base_url: str, api_key: str, bot_id: str) -> None:
@@ -77,4 +99,4 @@ def leave(base_url: str, api_key: str, bot_id: str) -> None:
         headers={"Authorization": f"Token {api_key}"},
         timeout=15,
     )
-    response.raise_for_status()
+    _raise_for_status(response)
