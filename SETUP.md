@@ -7,8 +7,7 @@ this can be scripted.
 
 ```sh
 pip install -e ".[dev]"     # runtime + test dependencies
-playwright install chromium # the browser JoinWorker drives
-cp .env.example .env        # then fill in your keys (see step 5)
+cp .env.example .env        # then fill in your keys (see step 4)
 ```
 
 `mia` runs as a long-lived foreground process:
@@ -17,53 +16,29 @@ cp .env.example .env        # then fill in your keys (see step 5)
 python -m mia.main
 ```
 
-## 1. Audio MIDI Setup routing
+## 1. Audio MIDI Setup routing and Chromium bot account login (obsolete)
 
-1. Open **Audio MIDI Setup** (Spotlight search).
-2. Click **+** (bottom left) → **Create Multi-Output Device**.
-3. Check both your normal speakers and **BlackHole 2ch**.
-4. This routes call audio to both your ears and to BlackHole (which `mia`
-   captures from).
+**No longer needed.** These steps applied only to the old Playwright/
+BlackHole-driven Meet-join path (a `JoinWorker` browser instance, routed
+through a BlackHole 2ch multi-output device, using a dedicated signed-in
+Chrome profile for device selection). That path has been replaced by the
+Attendee integration: Attendee's bot joins the call and handles its own
+audio routing, so there is no BlackHole multi-output device to configure
+and no Chrome bot-account profile to sign in. See the `ATTENDEE_*` entries in
+step 4 below for the environment variables that configure it instead.
 
-**Warning:** do not set this Multi-Output Device as your Mac's system-wide
-default output — every system sound (Slack pings, email notifications)
-would leak into the call. Only select it as the output *inside Meet's own
-in-call settings* (next step). If your macOS version supports per-app audio
-output routing (Sonoma+), prefer that instead; otherwise mute other
-notification sounds while `mia` is running.
+(`demo_standalone.py`, the separate local-mic/speaker demo, still imports
+`mia.audio.capture`/`mia.audio.injection` but runs against your system's
+default input/output devices — it does not require BlackHole either.)
 
-## 2. Bot account login and device selection (one time, in Chromium)
-
-1. Run `python3 -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('$HOME/.mia/chrome-profile', headless=False, channel='chrome'); input('press enter when done'); b.close()"`.
-   (`channel='chrome'` uses your real, locally-installed Google Chrome
-   instead of Playwright's bundled Chromium — Google's sign-in flow
-   detects and blocks the bundled one outright. Requires Google Chrome to
-   already be installed. Use `$HOME`, not `~` — `~` is not expanded inside
-   this quoted string and will silently create the profile in the wrong
-   place.)
-2. **Do not sign in from this automated window** — Google also blocks
-   sign-in for any Chrome instance launched with extra command-line flags
-   (including a plain `--user-data-dir`), automation or not. Instead: open
-   Chrome normally (double-click the app, no terminal), use its native
-   **profile switcher → Add Chrome Profile** to create and sign into a
-   separate profile as the bot account, and do the Meet call / device
-   selection (step 3 below) in *that* window. Then quit Chrome and copy
-   that profile's data into `~/.mia/chrome-profile` before running the
-   command above again (which will now just reuse the already-signed-in
-   session instead of hitting the sign-in flow at all).
-3. Join any Meet call, open in-call device settings, and select
-   **BlackHole 2ch** as both the microphone and speaker.
-4. Press enter in the terminal to close — this profile is reused on every
-   future run, so this is a one-time step.
-
-## 3. Automation permission
+## 2. Automation permission
 
 The first time `mia` runs `tab_detector.py`, macOS will prompt to allow
 Terminal (or whichever app runs `mia`) to control Google Chrome via
 Automation. Click **OK**. If missed, grant it manually under
 **System Settings → Privacy & Security → Automation**.
 
-## 4. Google Calendar + Gmail OAuth
+## 3. Google Calendar + Gmail OAuth
 
 Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env` (from a Google
 Cloud project with both the **Calendar API** and the **Gmail API**
@@ -79,7 +54,7 @@ next run re-consents with the full scope list — `mia` also detects this
 automatically and re-prompts (see `_authorize_google` in `main.py`), but
 deleting it manually avoids relying on that check.
 
-## 5. Environment variables
+## 4. Environment variables
 
 `python -m mia.main` loads `.env` from the working directory at startup
 (real exported environment variables take precedence).
@@ -99,3 +74,8 @@ Optional:
   correctness.
 - `WAKE_WORD` — defaults to `hey mia`.
 - `FUZZY_THRESHOLD` — wake-word match threshold, defaults to `0.75`.
+- `ATTENDEE_API_KEY` — the process starts fine without it, but it's
+  required to actually create Attendee bots (i.e. to join a call).
+- `ATTENDEE_BASE_URL` — defaults to `http://localhost:8000`.
+- `ATTENDEE_WEBSOCKET_PORT` — defaults to `8765`.
+- `ATTENDEE_BOT_NAME` — defaults to `Mia`.
