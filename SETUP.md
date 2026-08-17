@@ -7,7 +7,6 @@ this can be scripted.
 
 ```sh
 pip install -e ".[dev]"     # runtime + test dependencies
-playwright install chromium # the browser JoinWorker drives
 cp .env.example .env        # then fill in your keys (see step 5)
 ```
 
@@ -17,44 +16,46 @@ cp .env.example .env        # then fill in your keys (see step 5)
 python -m mia.main
 ```
 
-## 1. Audio MIDI Setup routing
+## 1. Audio MIDI Setup routing (standalone demo only)
+
+These steps route audio for `demo_standalone.py`, the local BlackHole-based
+demo that runs mia's pipeline against your own microphone and speakers.
+They are not needed for the real Meet-join path, which joins calls through
+Recall.ai's cloud meeting bot instead — see step 2.
 
 1. Open **Audio MIDI Setup** (Spotlight search).
 2. Click **+** (bottom left) → **Create Multi-Output Device**.
 3. Check both your normal speakers and **BlackHole 2ch**.
-4. This routes call audio to both your ears and to BlackHole (which `mia`
-   captures from).
+4. This routes call audio to both your ears and to BlackHole (which
+   `demo_standalone.py` captures from).
 
 **Warning:** do not set this Multi-Output Device as your Mac's system-wide
 default output — every system sound (Slack pings, email notifications)
 would leak into the call. Only select it as the output *inside Meet's own
-in-call settings* (next step). If your macOS version supports per-app audio
-output routing (Sonoma+), prefer that instead; otherwise mute other
-notification sounds while `mia` is running.
+in-call settings*. If your macOS version supports per-app audio output
+routing (Sonoma+), prefer that instead; otherwise mute other notification
+sounds while running the demo.
 
-## 2. Bot account login and device selection (one time, in Chromium)
+## 2. Recall.ai Meet-bot path
 
-1. Run `python3 -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch_persistent_context('$HOME/.mia/chrome-profile', headless=False, channel='chrome'); input('press enter when done'); b.close()"`.
-   (`channel='chrome'` uses your real, locally-installed Google Chrome
-   instead of Playwright's bundled Chromium — Google's sign-in flow
-   detects and blocks the bundled one outright. Requires Google Chrome to
-   already be installed. Use `$HOME`, not `~` — `~` is not expanded inside
-   this quoted string and will silently create the profile in the wrong
-   place.)
-2. **Do not sign in from this automated window** — Google also blocks
-   sign-in for any Chrome instance launched with extra command-line flags
-   (including a plain `--user-data-dir`), automation or not. Instead: open
-   Chrome normally (double-click the app, no terminal), use its native
-   **profile switcher → Add Chrome Profile** to create and sign into a
-   separate profile as the bot account, and do the Meet call / device
-   selection (step 3 below) in *that* window. Then quit Chrome and copy
-   that profile's data into `~/.mia/chrome-profile` before running the
-   command above again (which will now just reuse the already-signed-in
-   session instead of hitting the sign-in flow at all).
-3. Join any Meet call, open in-call device settings, and select
-   **BlackHole 2ch** as both the microphone and speaker.
-4. Press enter in the terminal to close — this profile is reused on every
-   future run, so this is a one-time step.
+The real Meet-join path runs through [Recall.ai](https://www.recall.ai)'s
+cloud meeting-bot API instead of a locally-driven browser: Recall's bot
+joins the Google Meet call and connects out to a local websocket server
+(`RecallAudioBridge`) that `mia` runs, exposed publicly through an ngrok
+reserved domain. No Google Workspace bot account or browser profile is
+needed.
+
+1. Get a Recall.ai API key and set `RECALL_API_KEY` in `.env`.
+2. Install [ngrok](https://ngrok.com) and set up a **reserved domain**
+   (paid tier — the free tier's interstitial page blocks Recall's bot from
+   connecting automatically), pointed at `http://localhost:8765` (or
+   whatever `RECALL_WEBSOCKET_PORT` is set to):
+   ```sh
+   ngrok http --domain=your-reserved-domain.ngrok.app 8765
+   ```
+3. Set `RECALL_WEBSOCKET_HOSTNAME` in `.env` to that reserved domain --
+   hostname only, no `https://` prefix (e.g.
+   `RECALL_WEBSOCKET_HOSTNAME=your-reserved-domain.ngrok.app`).
 
 ## 3. Automation permission
 

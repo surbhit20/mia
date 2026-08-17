@@ -233,6 +233,7 @@ def _run_call_loop(
                         base_url=config.recall_base_url,
                         api_key=config.recall_api_key,
                         bot_id=bot_id,
+                        timeout_seconds=5.0,
                     )
                     bot_still_in_meeting = current_bot_state not in _BOT_LEFT_STATES
                 except Exception as exc:
@@ -365,10 +366,32 @@ def _handle_join(
     state: StateStore,
     meet_url: str,
 ) -> None:
+    missing = [
+        name
+        for name, value in (
+            ("RECALL_API_KEY", config.recall_api_key),
+            ("RECALL_WEBSOCKET_HOSTNAME", config.recall_websocket_hostname),
+        )
+        if not value
+    ]
+    if missing:
+        # Without these the bot either fails to create or -- worse -- joins
+        # successfully against a "wss:///audio" endpoint it can never reach,
+        # leaving a billed but permanently deaf bot in the meeting.
+        safe_log(
+            "error",
+            "join failed",
+            meeting_url=meet_url,
+            error=f"missing required environment variable(s): {', '.join(missing)}",
+        )
+        state.set_status(meet_url, "skipped")
+        return
+
     websocket_url = f"wss://{config.recall_websocket_hostname}/audio"
     try:
         with RecallAudioBridge(port=config.recall_websocket_port) as bridge:
             bot_id = None
+            joined = False
             try:
                 bot_id = recall_client.create_bot(
                     base_url=config.recall_base_url,
@@ -382,9 +405,20 @@ def _handle_join(
                     api_key=config.recall_api_key,
                     bot_id=bot_id,
                 )
+                joined = True
+                safe_log("info", "joined meeting", meeting_url=meet_url)
+                _run_call_loop(config, registry, anthropic_client, meet_url, bridge, bot_id)
             except Exception as exc:
-                safe_log("error", "join failed", meeting_url=meet_url, error=str(exc))
-                state.set_status(meet_url, "skipped")
+                safe_log(
+                    "error",
+                    "call loop failed" if joined else "join failed",
+                    meeting_url=meet_url,
+                    error=str(exc),
+                )
+            finally:
+                # A finally, not an except: KeyboardInterrupt during
+                # wait_until_joined's poll is a BaseException, and letting it skip
+                # this would strand a paid bot in the user's live meeting.
                 if bot_id is not None:
                     try:
                         recall_client.leave(
@@ -394,24 +428,11 @@ def _handle_join(
                         )
                     except Exception as leave_exc:
                         safe_log("error", "leave failed", meeting_url=meet_url, error=str(leave_exc))
-                return
-
-            safe_log("info", "joined meeting", meeting_url=meet_url)
-            try:
-                _run_call_loop(config, registry, anthropic_client, meet_url, bridge, bot_id)
-            except Exception as exc:
-                safe_log("error", "call loop failed", meeting_url=meet_url, error=str(exc))
-            finally:
-                try:
-                    recall_client.leave(
-                        base_url=config.recall_base_url,
-                        api_key=config.recall_api_key,
-                        bot_id=bot_id,
-                    )
-                except Exception as exc:
-                    safe_log("error", "leave failed", meeting_url=meet_url, error=str(exc))
-                state.clear(meet_url)
-                safe_log("info", "left meeting", meeting_url=meet_url)
+                if joined:
+                    state.clear(meet_url)
+                    safe_log("info", "left meeting", meeting_url=meet_url)
+                else:
+                    state.set_status(meet_url, "skipped")
     except Exception as exc:
         # RecallAudioBridge.__enter__ itself failed (e.g. port already
         # bound). The caller in run() already marked this URL "joined"

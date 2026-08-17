@@ -35,7 +35,14 @@ class RecallAudioBridge:
             asyncio.set_event_loop(self._loop)
 
             async def _setup():
-                self._server = await websockets.serve(self._handle_connection, "0.0.0.0", self._port)
+                # localhost-only: the ngrok agent that forwards Recall's bot
+                # traffic runs on this same machine and connects to
+                # localhost, so nothing needs to reach this port from
+                # elsewhere on the network. A wider bind (e.g. "0.0.0.0")
+                # would let any device on the LAN push audio straight into a
+                # pipeline that holds live calendar-write and Gmail-read
+                # tool handles.
+                self._server = await websockets.serve(self._handle_connection, "127.0.0.1", self._port)
 
             try:
                 self._loop.run_until_complete(_setup())

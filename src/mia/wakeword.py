@@ -41,10 +41,15 @@ class WakeWordMatcher:
 
 def is_self_echo(transcript: str, spoken_text: str, threshold: float = 0.75) -> bool:
     """True if `transcript` looks like a fragment of `spoken_text` -- used to
-    filter out mia's own TTS looping back through capture (BlackHole routes
-    injected audio back into what mia captures, by design) rather than being
-    treated as a barge-in attempt or a new command. Reuses the same
-    fuzz.partial_ratio approach as WakeWordMatcher: it finds the best-matching
-    substring of the longer string against the shorter one, which is exactly
-    "does this incoming fragment look like part of what's currently playing"."""
+    filter out mia's own TTS looping back through capture rather than being
+    treated as a barge-in attempt or a new command. On the local BlackHole
+    path used by demo_standalone.py, this loopback is guaranteed: BlackHole
+    routes injected audio back into what mia captures, by design. On the
+    Recall.ai path, whether Recall's audio_mixed_raw stream includes mia's
+    own spoken output at all is unverified as of this branch -- so this
+    filter is load-bearing if that stream does echo mia's output, and a
+    harmless no-op if it doesn't. Reuses the same fuzz.partial_ratio approach
+    as WakeWordMatcher: it finds the best-matching substring of the longer
+    string against the shorter one, which is exactly "does this incoming
+    fragment look like part of what's currently playing"."""
     return fuzz.partial_ratio(_normalize(transcript), _normalize(spoken_text)) >= threshold * 100

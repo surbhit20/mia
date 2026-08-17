@@ -26,17 +26,21 @@ def create_bot(base_url: str, api_key: str, meeting_url: str, websocket_url: str
     return response.json()["id"]
 
 
-def bot_state(base_url: str, api_key: str, bot_id: str) -> str:
+def bot_state(base_url: str, api_key: str, bot_id: str, timeout_seconds: float = 15.0) -> str:
+    # Called every few seconds from the same thread that reads audio frames
+    # during a live call -- in-call callers should pass a smaller
+    # timeout_seconds than the default so a hung status GET can't stall
+    # audio reading for the full 15s.
     response = requests.get(
         f"{base_url}/api/v1/bot/{bot_id}/",
         headers={"Authorization": f"Token {api_key}"},
-        timeout=15,
+        timeout=timeout_seconds,
     )
     response.raise_for_status()
     status_changes = response.json().get("status_changes", [])
     if not status_changes:
         return ""
-    return status_changes[-1]["code"]
+    return status_changes[-1].get("code", "")
 
 
 def wait_until_joined(

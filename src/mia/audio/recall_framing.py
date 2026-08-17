@@ -10,15 +10,30 @@ class FrameBuffer:
     fixed-size frames on demand, padding with silence when a caller's
     timeout elapses before enough real audio has arrived. A
     threading.Condition lets pull() wake up as soon as enough data is
-    pushed, rather than polling."""
+    pushed, rather than polling.
 
-    def __init__(self):
+    Capped at max_bytes: while the main thread is busy inside
+    dispatch_command + synthesize + speak (routinely several seconds),
+    nothing drains the buffer, so an unbounded backlog would later be
+    replayed into Deepgram wholesale and mia could fire a turn on an
+    utterance from many seconds ago. push() drops the oldest bytes past
+    the cap instead of queuing them, deliberately mirroring how the live
+    audio device this replaced (BlackHoleCapture, reading a
+    sd.RawInputStream) dropped audio on overflow rather than queuing it:
+    stale meeting audio is worthless, and replaying it would make mia
+    respond to speech the speaker has moved on from."""
+
+    def __init__(self, max_bytes: int = 64000):
         self._buffer = bytearray()
         self._condition = threading.Condition()
+        self._max_bytes = max_bytes
 
     def push(self, chunk: bytes) -> None:
         with self._condition:
             self._buffer.extend(chunk)
+            if len(self._buffer) > self._max_bytes:
+                excess = len(self._buffer) - self._max_bytes
+                del self._buffer[:excess]
             self._condition.notify_all()
 
     def pull(self, num_bytes: int, timeout_seconds: float) -> bytes:

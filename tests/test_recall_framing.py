@@ -54,6 +54,17 @@ def test_frame_buffer_pull_returns_promptly_once_enough_data_pushed():
     assert elapsed < 0.5
 
 
+def test_frame_buffer_drops_oldest_audio_past_the_cap():
+    buffer = FrameBuffer(max_bytes=10)
+
+    buffer.push(b"0123456789")
+    buffer.push(b"abcde")
+
+    result = buffer.pull(num_bytes=10, timeout_seconds=1.0)
+
+    assert result == b"56789abcde"
+
+
 def test_extract_mixed_audio_chunk_decodes_correct_event():
     message = json.dumps(
         {

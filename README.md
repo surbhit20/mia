@@ -13,11 +13,13 @@ done.
 
 ## Status
 
-The real Meet-join path (a signed-in bot via [Attendee.dev](https://github.com/attendee-labs/attendee))
-is currently blocked on Google Workspace account access. The actively
-tested and working path today is the standalone demo
-(`demo_standalone.py`), which runs the exact same pipeline against your
-machine's own microphone and speakers instead of joining a call.
+The real Meet-join path runs through [Recall.ai](https://www.recall.ai)'s
+cloud meeting-bot API: Recall's bot joins the call and streams audio to a
+local websocket bridge that `mia` exposes publicly via an ngrok reserved
+domain. It needs a Recall API key and that reserved domain, but no Google
+Workspace account. There's also a standalone demo (`demo_standalone.py`),
+which runs the exact same pipeline against your machine's own microphone
+and speakers instead of joining a call.
 
 ## What she can do
 
