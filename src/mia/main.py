@@ -195,6 +195,19 @@ def _run_call_loop(
         if not is_final:
             return
         with lock:
+            # DIAGNOSTIC: every final transcript, with the state that decides
+            # its fate. Without this a missed wake word is unattributable --
+            # Deepgram mishearing, the fuzzy matcher rejecting, and the turn
+            # state gating it out all look identical from outside (silence).
+            safe_log(
+                "info",
+                "transcript",
+                text=text,
+                state=str(turn_state.current()),
+                wake_matched=wake_word.matches(text),
+                capturing=command_buffer.is_capturing(),
+                gated_out=not turn_state.should_process_stt(),
+            )
             if not turn_state.should_process_stt():
                 return
             if turn_state.current() == TurnState.SPEAKING and current_speech[0] is not None:
@@ -242,6 +255,11 @@ def _run_call_loop(
                     # for this iteration.
                     safe_log("warning", "bot status poll failed", meeting_url=meet_url, error=str(exc))
 
+                # DIAGNOSTIC: audio-transport health. connections=0 means
+                # Recall never dialed the bridge; a pulls_padded ratio near
+                # pulls_served means frames are mostly fabricated silence.
+                safe_log("info", "audio stats", meeting_url=meet_url, **bridge.stats())
+
                 if not bot_still_in_meeting:
                     safe_log("info", "leave signal", meeting_url=meet_url, reason="bot left meeting")
                     break
@@ -286,6 +304,12 @@ def _run_call_loop(
                         command_text = command_buffer.on_silence()
                         if command_text:
                             turn_state.command_captured()
+                        else:
+                            # DIAGNOSTIC: capture ended with nothing. Means the
+                            # wake word fired but no transcript followed before
+                            # the silence threshold -- a distinct failure from
+                            # never waking at all.
+                            safe_log("info", "command capture ended empty", meeting_url=meet_url)
 
             if not command_text:
                 continue

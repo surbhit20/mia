@@ -25,6 +25,9 @@ class RecallAudioBridge:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
         self._thread: threading.Thread | None = None
+        self.connections = 0
+        self.messages_received = 0
+        self.messages_unparsed = 0
 
     def __enter__(self) -> "RecallAudioBridge":
         ready = threading.Event()
@@ -78,10 +81,34 @@ class RecallAudioBridge:
             self._thread.join(timeout=5)
 
     async def _handle_connection(self, websocket) -> None:
+        self.connections += 1
         async for raw_message in websocket:
+            self.messages_received += 1
             chunk = extract_mixed_audio_chunk(raw_message)
             if chunk is not None:
                 self._frame_buffer.push(chunk)
+            else:
+                # Non-audio events (participant joins, etc.) land here too,
+                # so this is only alarming when it accounts for most traffic.
+                self.messages_unparsed += 1
+
+    def stats(self) -> dict:
+        """Counters for diagnosing a bot that appears deaf. `connections` at 0
+        means Recall never reached this bridge at all; a high `pulls_padded`
+        ratio means audio is arriving too slowly to fill frames, so the VAD
+        sees fabricated silence; `bytes_dropped` above 0 means the buffer
+        overflowed and real speech was discarded."""
+        fb = self._frame_buffer
+        return {
+            "connections": self.connections,
+            "messages_received": self.messages_received,
+            "messages_unparsed": self.messages_unparsed,
+            "chunks_pushed": fb.chunks_pushed,
+            "bytes_pushed": fb.bytes_pushed,
+            "bytes_dropped": fb.bytes_dropped,
+            "pulls_served": fb.pulls_served,
+            "pulls_padded": fb.pulls_padded,
+        }
 
     def read_frame(self, frame_ms: int = 30) -> bytes:
         num_bytes = int(self._sample_rate * frame_ms / 1000) * _BYTES_PER_SAMPLE

@@ -27,13 +27,25 @@ class FrameBuffer:
         self._buffer = bytearray()
         self._condition = threading.Condition()
         self._max_bytes = max_bytes
+        # Diagnostic counters. Both failure modes here are silent from the
+        # outside: a starved pull() substitutes silence, and an overflowing
+        # push() discards audio. Downstream, the VAD reads either as "not
+        # speech" -- indistinguishable from the speaker being quiet.
+        self.chunks_pushed = 0
+        self.bytes_pushed = 0
+        self.bytes_dropped = 0
+        self.pulls_served = 0
+        self.pulls_padded = 0
 
     def push(self, chunk: bytes) -> None:
         with self._condition:
             self._buffer.extend(chunk)
+            self.chunks_pushed += 1
+            self.bytes_pushed += len(chunk)
             if len(self._buffer) > self._max_bytes:
                 excess = len(self._buffer) - self._max_bytes
                 del self._buffer[:excess]
+                self.bytes_dropped += excess
             self._condition.notify_all()
 
     def pull(self, num_bytes: int, timeout_seconds: float) -> bytes:
@@ -44,10 +56,12 @@ class FrameBuffer:
                 if remaining <= 0:
                     break
                 self._condition.wait(timeout=remaining)
+            self.pulls_served += 1
             if len(self._buffer) >= num_bytes:
                 result = bytes(self._buffer[:num_bytes])
                 del self._buffer[:num_bytes]
                 return result
+            self.pulls_padded += 1
             result = bytes(self._buffer) + b"\x00" * (num_bytes - len(self._buffer))
             self._buffer.clear()
             return result
