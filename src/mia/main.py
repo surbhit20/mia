@@ -21,8 +21,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from mia.audio.capture import BlackHoleCapture
-from mia.audio.injection import is_playback_active, start_playback, stop_playback
+from mia import attendee_client
+from mia.audio.attendee_bridge import AttendeeAudioBridge
 from mia.audio.vad import FrameVAD
 from mia.command_buffer import CommandBuffer
 from mia.config import Config
@@ -30,7 +30,6 @@ from mia.detection.calendar_enricher import find_current_meeting_title
 from mia.detection.mic_monitor import is_mic_active
 from mia.detection.tab_detector import find_active_meet_tab
 from mia.detection.trigger import decide
-from mia.join_worker import JoinWorker
 from mia.llm import ConversationHistory, dispatch_command
 from mia.logging_setup import configure as configure_logging
 from mia.logging_setup import safe_log
@@ -80,6 +79,14 @@ _LEAVE_CONFIRM_CHECKS = 2
 # (24 * 32ms = 768ms, sub-second per the spec's turn-taking requirement, and
 # long enough to survive a natural pause after the wake phrase).
 _SILENCE_FRAMES_TO_END_COMMAND = 24
+
+_BOT_AVATAR_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "bot_avatar.png"
+
+# States that mean Attendee's bot is no longer usably present in the
+# meeting -- checked alongside the existing tab-based leave signal so a
+# bot removed by another participant (or a fatal error) is also noticed,
+# not just a locally-closed Chrome tab.
+_BOT_LEFT_STATES = {"fatal_error", "ended", "data_deleted"}
 
 
 def _save_credentials(creds: Credentials) -> None:
@@ -136,6 +143,8 @@ def _run_call_loop(
     registry: ToolRegistry,
     anthropic_client: Anthropic,
     meet_url: str,
+    bridge: AttendeeAudioBridge,
+    bot_id: str,
 ) -> None:
     turn_state = TurnStateMachine()
     wake_word = WakeWordMatcher(config.wake_word, threshold=config.fuzzy_threshold)
@@ -179,7 +188,7 @@ def _run_call_loop(
                 # Stopping playback here is what makes this a real barge-in
                 # when the wake word arrives during SPEAKING -- harmless no-op
                 # if nothing is currently playing (the normal LISTENING case).
-                stop_playback()
+                bridge.stop_playback()
                 turn_state.wake_word_detected()
                 command_buffer.start()
                 # NOTE: the draft dropped the fragment the wake word arrived
@@ -192,139 +201,152 @@ def _run_call_loop(
                 command_buffer.append(text + " ")
                 safe_log("info", "wake word detected", meeting_url=meet_url)
 
-    # NOTE: the draft started the STT socket before opening the audio device.
-    # Opening capture first means a missing/misconfigured BlackHole device
-    # fails before a Deepgram connection is opened, and stt.stop() now runs in
-    # a finally block so the socket and listener thread are never leaked when
-    # the loop raises.
-    with BlackHoleCapture(sample_rate=16000) as capture:
-        stt = StreamingSTT(config.deepgram_api_key, on_transcript)
-        stt.start()
-        try:
-            silence_frames = 0
-            missed_tab_checks = 0
-            last_tab_check = time.monotonic()
+    stt = StreamingSTT(config.deepgram_api_key, on_transcript)
+    stt.start()
+    try:
+        silence_frames = 0
+        missed_tab_checks = 0
+        last_tab_check = time.monotonic()
 
-            while True:
-                now = time.monotonic()
-                if now - last_tab_check >= _LEAVE_CHECK_INTERVAL_SECONDS:
-                    last_tab_check = now
-                    if find_active_meet_tab() == meet_url:
-                        missed_tab_checks = 0
-                    else:
-                        missed_tab_checks += 1
-                        if missed_tab_checks >= _LEAVE_CONFIRM_CHECKS:
-                            safe_log("info", "leave signal", meeting_url=meet_url)
-                            break
+        while True:
+            now = time.monotonic()
+            if now - last_tab_check >= _LEAVE_CHECK_INTERVAL_SECONDS:
+                last_tab_check = now
 
-                turn_state.tick()
-
-                # A barge-in wake word already moved the machine out of
-                # SPEAKING (and stopped playback) from on_transcript, on the
-                # STT listener thread -- this only fires for a response that
-                # finished on its own, uninterrupted.
-                with lock:
-                    if turn_state.current() == TurnState.SPEAKING and not is_playback_active():
-                        turn_state.finish_speaking()
-
-                frame = capture.read_frame(frame_ms=_FRAME_MS)
-
-                if turn_state.should_process_stt():
-                    stt.send_frame(frame)
-
-                # Called every iteration, gated or not: STT frames are now
-                # blocked only during COMMAND_CAPTURED (the Claude + TTS
-                # generation window), and Deepgram drops a silent connection
-                # after ~10s. This is a no-op except during that window --
-                # self-echo during SPEAKING is handled by content-based
-                # filtering in on_transcript (is_self_echo), not by blocking
-                # STT outright.
-                stt.send_keepalive_if_idle()
-
-                is_speech = vad.is_speech(frame)
-
-                command_text = None
-                with lock:
-                    if not command_buffer.is_capturing():
-                        silence_frames = 0
-                    elif is_speech:
-                        silence_frames = 0
-                    else:
-                        silence_frames += 1
-                        if silence_frames >= _SILENCE_FRAMES_TO_END_COMMAND:
-                            silence_frames = 0
-                            command_text = command_buffer.on_silence()
-                            if command_text:
-                                # Move out of LISTENING before the slow work
-                                # below. This blocks STT for the
-                                # Claude+TTS-generation window; self-echo once
-                                # audio starts playing (SPEAKING) is instead
-                                # handled by is_self_echo() filtering in
-                                # on_transcript, not by blocking STT.
-                                turn_state.command_captured()
-
-                if not command_text:
-                    continue
-
-                # NOTE: dispatch_command() only catches failures inside the
-                # tool handler, so a Claude API error (or a TTS error) would
-                # otherwise propagate out and end the meeting -- caught below
-                # and recovered via abandon_turn() either way.
-                #
-                # start_speaking() no longer fires unconditionally up front:
-                # SPEAKING now means "audio is playing" specifically (so a
-                # barge-in wake word during SPEAKING has actual audio to
-                # interrupt), so it's called right before start_playback()
-                # instead, only on the path that actually produces audio.
-                # The bare-wake-phrase path and any exception path use
-                # abandon_turn() to recover straight to LISTENING, since
-                # neither has audio to speak or cool down from. A normal,
-                # uninterrupted response's SPEAKING -> COOLDOWN -> LISTENING
-                # transition now happens from the loop's natural-completion
-                # check above, not from a `finally` block here.
+                bot_still_in_meeting = True
                 try:
-                    # Spec: a false trigger must stay silent. If nothing was
-                    # said beyond the wake phrase itself, the wake word fired
-                    # on stray speech -- skip dispatch_command entirely so a
-                    # bare trigger costs no Claude call and consumes no slot
-                    # in the bounded conversation-memory window. A genuine
-                    # unrecognized command (real words after the wake phrase)
-                    # still reaches dispatch_command and gets its own spoken
-                    # fallback from there.
-                    if not wake_word.strip_wake_phrase(command_text):
-                        safe_log(
-                            "info",
-                            "bare wake phrase ignored",
-                            meeting_url=meet_url,
-                        )
-                        with lock:
-                            turn_state.abandon_turn()
-                    else:
-                        result = dispatch_command(anthropic_client, registry, command_text, history)
-                        safe_log(
-                            "info",
-                            "command dispatched",
-                            tool=result.tool_name,
-                            meeting_url=meet_url,
-                        )
-                        audio = synthesize(
-                            config.elevenlabs_api_key, result.confirmation
-                        )
-                        with lock:
-                            turn_state.start_speaking()
-                            current_speech[0] = result.confirmation
-                            start_playback(audio)
+                    current_bot_state = attendee_client.bot_state(
+                        base_url=config.attendee_base_url,
+                        api_key=config.attendee_api_key,
+                        bot_id=bot_id,
+                    )
+                    bot_still_in_meeting = current_bot_state not in _BOT_LEFT_STATES
                 except Exception as exc:
+                    # A transient status-poll failure must not end the
+                    # call -- fall back to the tab-based signal alone
+                    # for this iteration.
+                    safe_log("warning", "bot status poll failed", meeting_url=meet_url, error=str(exc))
+
+                if not bot_still_in_meeting:
+                    safe_log("info", "leave signal", meeting_url=meet_url, reason="bot left meeting")
+                    break
+
+                if find_active_meet_tab() == meet_url:
+                    missed_tab_checks = 0
+                else:
+                    missed_tab_checks += 1
+                    if missed_tab_checks >= _LEAVE_CONFIRM_CHECKS:
+                        safe_log("info", "leave signal", meeting_url=meet_url, reason="tab closed")
+                        break
+
+            turn_state.tick()
+
+            # A barge-in wake word already moved the machine out of
+            # SPEAKING (and stopped playback) from on_transcript, on the
+            # STT listener thread -- this only fires for a response that
+            # finished on its own, uninterrupted.
+            with lock:
+                if turn_state.current() == TurnState.SPEAKING and not bridge.is_playback_active():
+                    turn_state.finish_speaking()
+
+            frame = bridge.read_frame(frame_ms=_FRAME_MS)
+
+            if turn_state.should_process_stt():
+                stt.send_frame(frame)
+
+            # Called every iteration, gated or not: STT frames are now
+            # blocked only during COMMAND_CAPTURED (the Claude + TTS
+            # generation window), and Deepgram drops a silent connection
+            # after ~10s. This is a no-op except during that window --
+            # self-echo during SPEAKING is handled by content-based
+            # filtering in on_transcript (is_self_echo), not by blocking
+            # STT outright.
+            stt.send_keepalive_if_idle()
+
+            is_speech = vad.is_speech(frame)
+
+            command_text = None
+            with lock:
+                if not command_buffer.is_capturing():
+                    silence_frames = 0
+                elif is_speech:
+                    silence_frames = 0
+                else:
+                    silence_frames += 1
+                    if silence_frames >= _SILENCE_FRAMES_TO_END_COMMAND:
+                        silence_frames = 0
+                        command_text = command_buffer.on_silence()
+                        if command_text:
+                            # Move out of LISTENING before the slow work
+                            # below. This blocks STT for the
+                            # Claude+TTS-generation window; self-echo once
+                            # audio starts playing (SPEAKING) is instead
+                            # handled by is_self_echo() filtering in
+                            # on_transcript, not by blocking STT.
+                            turn_state.command_captured()
+
+            if not command_text:
+                continue
+
+            # NOTE: dispatch_command() only catches failures inside the
+            # tool handler, so a Claude API error (or a TTS error) would
+            # otherwise propagate out and end the meeting -- caught below
+            # and recovered via abandon_turn() either way.
+            #
+            # start_speaking() no longer fires unconditionally up front:
+            # SPEAKING now means "audio is playing" specifically (so a
+            # barge-in wake word during SPEAKING has actual audio to
+            # interrupt), so it's called right before start_playback()
+            # instead, only on the path that actually produces audio.
+            # The bare-wake-phrase path and any exception path use
+            # abandon_turn() to recover straight to LISTENING, since
+            # neither has audio to speak or cool down from. A normal,
+            # uninterrupted response's SPEAKING -> COOLDOWN -> LISTENING
+            # transition now happens from the loop's natural-completion
+            # check above, not from a `finally` block here.
+            try:
+                # Spec: a false trigger must stay silent. If nothing was
+                # said beyond the wake phrase itself, the wake word fired
+                # on stray speech -- skip dispatch_command entirely so a
+                # bare trigger costs no Claude call and consumes no slot
+                # in the bounded conversation-memory window. A genuine
+                # unrecognized command (real words after the wake phrase)
+                # still reaches dispatch_command and gets its own spoken
+                # fallback from there.
+                if not wake_word.strip_wake_phrase(command_text):
                     safe_log(
-                        "error",
-                        "voice turn failed",
+                        "info",
+                        "bare wake phrase ignored",
                         meeting_url=meet_url,
-                        error=str(exc),
                     )
                     with lock:
                         turn_state.abandon_turn()
-        finally:
-            stt.stop()
+                else:
+                    result = dispatch_command(anthropic_client, registry, command_text, history)
+                    safe_log(
+                        "info",
+                        "command dispatched",
+                        tool=result.tool_name,
+                        meeting_url=meet_url,
+                    )
+                    audio = synthesize(
+                        config.elevenlabs_api_key, result.confirmation
+                    )
+                    with lock:
+                        turn_state.start_speaking()
+                        current_speech[0] = result.confirmation
+                        bridge.start_playback(audio)
+            except Exception as exc:
+                safe_log(
+                    "error",
+                    "voice turn failed",
+                    meeting_url=meet_url,
+                    error=str(exc),
+                )
+                with lock:
+                    turn_state.abandon_turn()
+    finally:
+        stt.stop()
 
 
 def _prompt_join_safely(title: str) -> NotificationResult:
@@ -349,30 +371,52 @@ def _handle_join(
     state: StateStore,
     meet_url: str,
 ) -> None:
-    worker = JoinWorker()
-    try:
-        worker.join(meet_url)
-    except Exception as exc:
-        # Spec ("Can't join"): log and skip; detection keeps running. Leave the
-        # URL marked "skipped" so the next poll doesn't immediately re-prompt
-        # for the same failing call. JoinWorker.join() tears itself down on
-        # failure, so there is nothing to clean up here.
-        safe_log("error", "join failed", meeting_url=meet_url, error=str(exc))
-        state.set_status(meet_url, "skipped")
-        return
-
-    safe_log("info", "joined meeting", meeting_url=meet_url)
-    try:
-        _run_call_loop(config, registry, anthropic_client, meet_url)
-    except Exception as exc:
-        safe_log("error", "call loop failed", meeting_url=meet_url, error=str(exc))
-    finally:
+    websocket_url = f"ws://host.docker.internal:{config.attendee_websocket_port}/audio"
+    with AttendeeAudioBridge(port=config.attendee_websocket_port) as bridge:
         try:
-            worker.leave()
+            bot_id = attendee_client.create_bot(
+                base_url=config.attendee_base_url,
+                api_key=config.attendee_api_key,
+                meeting_url=meet_url,
+                websocket_url=websocket_url,
+                bot_name=config.attendee_bot_name,
+            )
+            attendee_client.wait_until_joined(
+                base_url=config.attendee_base_url,
+                api_key=config.attendee_api_key,
+                bot_id=bot_id,
+            )
         except Exception as exc:
-            safe_log("error", "leave failed", meeting_url=meet_url, error=str(exc))
-        state.clear(meet_url)
-        safe_log("info", "left meeting", meeting_url=meet_url)
+            # Spec ("Can't join"): log and skip; detection keeps running.
+            # Leave the URL marked "skipped" so the next poll doesn't
+            # immediately re-prompt for the same failing call.
+            safe_log("error", "join failed", meeting_url=meet_url, error=str(exc))
+            state.set_status(meet_url, "skipped")
+            return
+
+        attendee_client.set_avatar_image(
+            base_url=config.attendee_base_url,
+            api_key=config.attendee_api_key,
+            bot_id=bot_id,
+            image_path=_BOT_AVATAR_PATH,
+        )
+
+        safe_log("info", "joined meeting", meeting_url=meet_url)
+        try:
+            _run_call_loop(config, registry, anthropic_client, meet_url, bridge, bot_id)
+        except Exception as exc:
+            safe_log("error", "call loop failed", meeting_url=meet_url, error=str(exc))
+        finally:
+            try:
+                attendee_client.leave(
+                    base_url=config.attendee_base_url,
+                    api_key=config.attendee_api_key,
+                    bot_id=bot_id,
+                )
+            except Exception as exc:
+                safe_log("error", "leave failed", meeting_url=meet_url, error=str(exc))
+            state.clear(meet_url)
+            safe_log("info", "left meeting", meeting_url=meet_url)
 
 
 def run() -> None:
