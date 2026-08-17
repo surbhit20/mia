@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 import threading
 import time
@@ -68,10 +69,16 @@ def extract_mixed_audio_chunk(raw_message: str) -> bytes | None:
         return None
     if not isinstance(payload, dict) or payload.get("trigger") != "realtime_audio.mixed":
         return None
-    chunk_b64 = payload.get("data", {}).get("chunk")
-    if not chunk_b64:
+    try:
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return None
+        chunk_b64 = data.get("chunk")
+        if not chunk_b64:
+            return None
+        return base64.b64decode(chunk_b64)
+    except (AttributeError, TypeError, binascii.Error):
         return None
-    return base64.b64decode(chunk_b64)
 
 
 def paced_send(

@@ -132,3 +132,21 @@ def test_paced_send_stops_early_when_stop_event_set_mid_stream():
     )
 
     assert sent == [b"a", b"b"]
+
+
+def test_extract_mixed_audio_chunk_returns_none_on_null_data():
+    message = json.dumps({"trigger": "realtime_audio.mixed", "data": None})
+
+    assert extract_mixed_audio_chunk(message) is None
+
+
+def test_extract_mixed_audio_chunk_returns_none_on_non_dict_data():
+    message = json.dumps({"trigger": "realtime_audio.mixed", "data": [1, 2, 3]})
+
+    assert extract_mixed_audio_chunk(message) is None
+
+
+def test_extract_mixed_audio_chunk_returns_none_on_invalid_base64_chunk():
+    message = json.dumps({"trigger": "realtime_audio.mixed", "data": {"chunk": "not-valid-base64!!!"}})
+
+    assert extract_mixed_audio_chunk(message) is None
