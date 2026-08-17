@@ -16,6 +16,10 @@ dependencies = [
     "python-dotenv>=1.0",
     "requests>=2.31",
     "websockets>=12.0",
+    # Imported directly by audio/vad.py and audio/injection.py. It arrives
+    # transitively via torch often enough to hide this, but a fresh install
+    # without it fails at import time.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
