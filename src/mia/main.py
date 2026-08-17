@@ -71,14 +71,23 @@ _LEAVE_CHECK_INTERVAL_SECONDS = 3.0
 # consecutive misses before leaving.
 _LEAVE_CONFIRM_CHECKS = 2
 
-# NOTE: the draft ended command capture on the first non-speech frame (30ms),
-# which would cut every command off at its first natural pause -- and, worse,
+# NOTE: the draft ended command capture on the first non-speech frame, which
+# cut every command off at its first natural pause -- and worse,
 # CommandBuffer.on_silence() stops capturing even when it returns None, so a
-# single silent frame right after the wake word would abandon the command
-# entirely. Require a run of consecutive non-speech frames instead
-# (24 * 32ms = 768ms, sub-second per the spec's turn-taking requirement, and
-# long enough to survive a natural pause after the wake phrase).
-_SILENCE_FRAMES_TO_END_COMMAND = 24
+# single silent frame right after the wake word abandoned the command
+# entirely. A sustained pause is required instead.
+#
+# How long a speaker must stop talking before their command is considered
+# finished.
+#
+# Measured in wall-clock seconds, NOT in frames. A frame count only equals a
+# duration if frames arrive at real time, and on the Recall path they do not:
+# the loop blocks every few seconds on a status GET and an AppleScript tab
+# scan, and the audio buffered during those stalls then drains at memory
+# speed (firing the threshold far too early), while a stalled stream makes
+# each read wait out its starvation timeout instead (firing it far too late).
+# Wall-clock time is immune to both.
+_SILENCE_SECONDS_TO_END_COMMAND = 1.2
 
 # States that mean Recall's bot is no longer usably present in the
 # meeting -- checked alongside the existing tab-based leave signal so a
@@ -231,7 +240,7 @@ def _run_call_loop(
     stt = StreamingSTT(config.deepgram_api_key, on_transcript)
     stt.start()
     try:
-        silence_frames = 0
+        silence_started_at: float | None = None
         missed_tab_checks = 0
         last_tab_check = time.monotonic()
 
@@ -294,13 +303,14 @@ def _run_call_loop(
             command_text = None
             with lock:
                 if not command_buffer.is_capturing():
-                    silence_frames = 0
+                    silence_started_at = None
                 elif is_speech:
-                    silence_frames = 0
+                    silence_started_at = None
                 else:
-                    silence_frames += 1
-                    if silence_frames >= _SILENCE_FRAMES_TO_END_COMMAND:
-                        silence_frames = 0
+                    if silence_started_at is None:
+                        silence_started_at = time.monotonic()
+                    if time.monotonic() - silence_started_at >= _SILENCE_SECONDS_TO_END_COMMAND:
+                        silence_started_at = None
                         command_text = command_buffer.on_silence()
                         if command_text:
                             turn_state.command_captured()
