@@ -29,6 +29,10 @@ class Config:
     wake_word: str = "hey mia"
     fuzzy_threshold: float = 0.75
     state_file: Path = field(default_factory=lambda: Path("~/.mia/state.json").expanduser())
+    attendee_api_key: str = ""
+    attendee_base_url: str = "http://localhost:8000"
+    attendee_websocket_port: int = 8765
+    attendee_bot_name: str = "Mia"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -47,4 +51,8 @@ class Config:
             logfire_token=os.environ.get("LOGFIRE_TOKEN", ""),
             wake_word=os.environ.get("WAKE_WORD", "hey mia"),
             fuzzy_threshold=float(os.environ.get("FUZZY_THRESHOLD", "0.75")),
+            attendee_api_key=os.environ.get("ATTENDEE_API_KEY", ""),
+            attendee_base_url=os.environ.get("ATTENDEE_BASE_URL", "http://localhost:8000"),
+            attendee_websocket_port=int(os.environ.get("ATTENDEE_WEBSOCKET_PORT", "8765")),
+            attendee_bot_name=os.environ.get("ATTENDEE_BOT_NAME", "Mia"),
         )

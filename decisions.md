@@ -377,6 +377,65 @@ usage.
 step), but less transparent to other participants and can't coexist with
 the user's own browser session.
 
+## 2026-08-17 — AttendeeClient integration: live trial findings (wss:// required, container OOM)
+
+**Finding 1 — Attendee's API hard-rejects `ws://`, requires `wss://`.**
+Confirmed live: `create_bot` with `websocket_settings.audio.url` starting
+with `ws://` returns a 400 (`bots/serializers.py`'s request validation
+unconditionally requires `wss://`, no dev-mode bypass, no exception for
+`localhost`/`host.docker.internal`). This meant the bot-join path as
+originally shipped in the AttendeeClient PR would have failed on every
+real invocation. Fixed: `AttendeeAudioBridge` now optionally terminates
+TLS with a self-signed cert (`src/mia/audio/tls_cert.py`, generated once
+via `openssl` and reused, stored at `~/.mia/attendee-bridge-tls/`), and
+`main.py` builds a `wss://` URL and passes the cert/key.
+
+**Finding 2 — Attendee's own websocket client uses default (strict) TLS
+verification, so the Docker container running it must be told to trust
+our self-signed cert.** Read `bots/bot_controller/bot_websocket_client.py`
+directly: it calls `websockets.sync.client.connect(url)` with no SSL
+override. A self-signed cert is rejected by Python's default CA trust
+store unless added to it. This is a **local-environment setup step, not
+something mia's own code can do from inside its own process** — it lives
+outside this repo, in whichever machine runs the self-hosted Attendee
+Docker Compose stack:
+
+```bash
+docker cp ~/.mia/attendee-bridge-tls/cert.pem attendee-attendee-worker-local-1:/usr/local/share/ca-certificates/mia-bridge.crt
+docker exec --user root attendee-attendee-worker-local-1 update-ca-certificates
+```
+
+This is exec'd into the running container, so it does **not** survive a
+container recreate (`docker compose up --force-recreate` or a fresh
+`docker compose up` after removing the container) — it needs to be
+re-run after that. Verified live, twice: once via a direct Python
+`websockets.sync.client.connect()` call from inside the worker container
+(mirroring Attendee's exact connection code) against a throwaway test
+server, and once end-to-end with a real bot joining a real Meet call —
+the worker log showed `BotWebsocketClient websocket connected` and live
+`SilenceStatus` audio-volume messages flowing through mia's bridge.
+
+**Finding 3 — the self-hosted Attendee Docker stack is genuinely resource-
+constrained on this machine and can silently die mid-session.** During
+the live trial, the bot's actual browser session (headless Chrome + a
+screen-recording ffmpeg process) stopped producing any log output ~30s
+after successfully joining, with the participant disappearing from the
+real Meet call's UI -- but Attendee's own `Bot.state` stayed stuck at
+`joined_recording` and neither raised an error nor updated. `docker
+inspect`'s `.State.OOMKilled` was `true` for the worker container, and
+`docker stats` showed it sitting at ~75% of its memory limit even at
+rest. Root cause: this Mac is Apple Silicon, and Attendee's Docker image
+is `linux/amd64` -- so the whole stack (headless Chrome, video capture,
+audio pipeline) runs under x86 emulation, which is memory- and CPU-heavy
+enough to hit the container's memory ceiling under real load. **This is
+an environment/infrastructure limitation of self-hosting Attendee on this
+specific machine, not a defect in the AttendeeClient integration code** --
+the actual scope of the trial (bot join, TLS-secured realtime-audio
+websocket connection, live audio streaming through the bridge) was fully
+verified working before the OOM kill. Not yet resolved; a real fix would
+mean raising the container's memory limit (if resources allow) or moving
+self-hosted Attendee to a native-architecture host.
+
 ## 2026-08-12 — Build the Meet-join mechanism in-house (Playwright)
 
 **Why:** Deliberate choice to learn the mechanics directly and keep meeting
