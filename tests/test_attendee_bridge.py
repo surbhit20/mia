@@ -68,3 +68,23 @@ def test_enter_and_exit_start_and_stop_the_server_cleanly():
 
     with bridge:
         assert bridge._server is not None
+
+
+def test_port_is_released_after_exit():
+    # Regression test: __exit__ must close the server's listening socket,
+    # not just stop the event loop. Without proper socket closure, the port
+    # remains bound and a second bridge on the same fixed port fails with
+    # OSError: Address already in use. This matters because Task 5 constructs
+    # AttendeeAudioBridge on a fixed configured port (8765) repeatedly across
+    # the app's lifetime.
+    fixed_port = 18765
+    bridge1 = AttendeeAudioBridge(port=fixed_port, sample_rate=16000)
+
+    with bridge1:
+        assert bridge1._server is not None
+
+    # After first bridge exits, the port should be released.
+    # This second bridge should succeed without OSError.
+    bridge2 = AttendeeAudioBridge(port=fixed_port, sample_rate=16000)
+    with bridge2:
+        assert bridge2._server is not None

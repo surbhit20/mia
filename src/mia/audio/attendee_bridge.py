@@ -64,6 +64,16 @@ class AttendeeAudioBridge:
         return self
 
     def __exit__(self, *exc_info) -> None:
+        if self._loop is not None and self._server is not None:
+            async def _close() -> None:
+                self._server.close()
+                await self._server.wait_closed()
+
+            future = asyncio.run_coroutine_threadsafe(_close(), self._loop)
+            try:
+                future.result(timeout=5)
+            except Exception:
+                pass
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread is not None:
