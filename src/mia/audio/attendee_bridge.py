@@ -1,6 +1,8 @@
 import asyncio
+import ssl
 import threading
 import time
+from pathlib import Path
 
 import websockets
 
@@ -25,9 +27,23 @@ class AttendeeAudioBridge:
     stop_playback() interface BlackHoleCapture and audio/injection.py
     already provided, so main.py's call loop does not need to change."""
 
-    def __init__(self, port: int, sample_rate: int = 16000):
+    def __init__(
+        self,
+        port: int,
+        sample_rate: int = 16000,
+        cert_path: Path | None = None,
+        key_path: Path | None = None,
+    ):
+        # Attendee's API rejects any websocket_settings.audio.url that
+        # doesn't start with wss:// (confirmed live -- there is no ws://
+        # dev-mode bypass), so this server must terminate TLS. cert_path/
+        # key_path are optional only so existing tests can keep exercising
+        # the plain-ws:// path without generating a cert; main.py always
+        # passes both in real use.
         self._port = port
         self._sample_rate = sample_rate
+        self._cert_path = cert_path
+        self._key_path = key_path
         self._frame_buffer = FrameBuffer()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
@@ -46,7 +62,13 @@ class AttendeeAudioBridge:
             asyncio.set_event_loop(self._loop)
             try:
                 async def setup():
-                    self._server = await websockets.serve(self._handle_connection, "0.0.0.0", self._port)
+                    ssl_context = None
+                    if self._cert_path is not None and self._key_path is not None:
+                        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                        ssl_context.load_cert_chain(str(self._cert_path), str(self._key_path))
+                    self._server = await websockets.serve(
+                        self._handle_connection, "0.0.0.0", self._port, ssl=ssl_context
+                    )
 
                 self._loop.run_until_complete(setup())
             except Exception as exc:

@@ -1,6 +1,10 @@
+import ssl
 import time
 
+import websockets.sync.client
+
 from mia.audio.attendee_bridge import AttendeeAudioBridge
+from mia.audio.tls_cert import ensure_self_signed_cert
 
 
 def test_read_frame_returns_pushed_audio_without_a_real_connection():
@@ -88,3 +92,30 @@ def test_port_is_released_after_exit():
     bridge2 = AttendeeAudioBridge(port=fixed_port, sample_rate=16000)
     with bridge2:
         assert bridge2._server is not None
+
+
+def test_serves_wss_and_receives_audio_when_cert_and_key_provided(tmp_path):
+    # Attendee's API rejects any websocket_settings.audio.url that isn't
+    # wss://, so the bridge must actually terminate TLS when a cert/key
+    # are given -- this proves our own server-side TLS setup is correct
+    # (a real wss:// handshake, a real message sent, real bytes landing
+    # in the frame buffer). Whether Attendee's own remote client trusts
+    # this self-signed cert is a separate, live-environment concern this
+    # unit test doesn't cover.
+    cert_path, key_path = ensure_self_signed_cert(tmp_path)
+    bridge = AttendeeAudioBridge(port=0, sample_rate=16000, cert_path=cert_path, key_path=key_path)
+
+    with bridge:
+        actual_port = next(iter(bridge._server.sockets)).getsockname()[1]
+
+        client_ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client_ssl_context.check_hostname = False
+        client_ssl_context.verify_mode = ssl.CERT_NONE
+
+        with websockets.sync.client.connect(f"wss://localhost:{actual_port}/audio", ssl=client_ssl_context) as client:
+            # base64("hello") == "aGVsbG8="
+            client.send('{"trigger": "realtime_audio.mixed", "data": {"chunk": "aGVsbG8=", "sample_rate": 16000}}')
+            time.sleep(0.2)
+
+        frame = bridge.read_frame(frame_ms=1)  # 1ms @ 16kHz*2 bytes = 32 bytes, but we only pushed 5
+        assert frame.startswith(b"hello")

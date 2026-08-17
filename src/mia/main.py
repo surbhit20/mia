@@ -23,6 +23,7 @@ from googleapiclient.discovery import build
 
 from mia import attendee_client
 from mia.audio.attendee_bridge import AttendeeAudioBridge
+from mia.audio.tls_cert import ensure_self_signed_cert
 from mia.audio.vad import FrameVAD
 from mia.command_buffer import CommandBuffer
 from mia.config import Config
@@ -87,6 +88,15 @@ _BOT_AVATAR_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "b
 # bot removed by another participant (or a fatal error) is also noticed,
 # not just a locally-closed Chrome tab.
 _BOT_LEFT_STATES = {"fatal_error", "ended", "data_deleted"}
+
+# Attendee's API rejects any websocket_settings.audio.url that doesn't
+# start with wss:// (confirmed live -- no ws:// dev-mode bypass exists),
+# so AttendeeAudioBridge must terminate TLS. This self-signed cert is
+# generated once and reused across runs; the container running Attendee
+# must be configured to trust it separately (a local-environment setup
+# step documented in decisions.md, not something mia's own code can do
+# from inside its own process).
+_TLS_CERT_DIR = Path("~/.mia/attendee-bridge-tls").expanduser()
 
 
 def _save_credentials(creds: Credentials) -> None:
@@ -374,9 +384,12 @@ def _handle_join(
     state: StateStore,
     meet_url: str,
 ) -> None:
-    websocket_url = f"ws://host.docker.internal:{config.attendee_websocket_port}/audio"
+    websocket_url = f"wss://host.docker.internal:{config.attendee_websocket_port}/audio"
+    cert_path, key_path = ensure_self_signed_cert(_TLS_CERT_DIR)
     try:
-        with AttendeeAudioBridge(port=config.attendee_websocket_port) as bridge:
+        with AttendeeAudioBridge(
+            port=config.attendee_websocket_port, cert_path=cert_path, key_path=key_path
+        ) as bridge:
             bot_id = None
             try:
                 bot_id = attendee_client.create_bot(
