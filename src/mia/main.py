@@ -185,6 +185,12 @@ def _run_call_loop(
     # end time rather than queried from a bridge.
     playback_end_time = [0.0]
 
+    # True from the moment SPEAKING begins until speak()'s POST returns and a
+    # real end time is known. The natural-completion check below must not fire
+    # in that window: playback_end_time still holds the previous turn's value,
+    # so without this the turn would end mid-POST.
+    playback_pending = [False]
+
     def on_transcript(text: str, is_final: bool) -> None:
         if not is_final:
             return
@@ -250,7 +256,11 @@ def _run_call_loop(
             turn_state.tick()
 
             with lock:
-                if turn_state.current() == TurnState.SPEAKING and time.monotonic() >= playback_end_time[0]:
+                if (
+                    turn_state.current() == TurnState.SPEAKING
+                    and not playback_pending[0]
+                    and time.monotonic() >= playback_end_time[0]
+                ):
                     turn_state.finish_speaking()
 
             frame = bridge.read_frame(frame_ms=_FRAME_MS)
@@ -299,16 +309,26 @@ def _run_call_loop(
                     audio = synthesize(
                         config.elevenlabs_api_key, result.confirmation, output_format="mp3_44100_128"
                     )
+                    playback_seconds = _estimate_playback_seconds(audio)
                     with lock:
                         turn_state.start_speaking()
                         current_speech[0] = result.confirmation
-                        recall_client.speak(
-                            base_url=config.recall_base_url,
-                            api_key=config.recall_api_key,
-                            bot_id=bot_id,
-                            mp3_bytes=audio,
-                        )
-                        playback_end_time[0] = time.monotonic() + _estimate_playback_seconds(audio)
+                        playback_pending[0] = True
+                    # Deliberately outside the lock: this is a network POST with a 30s
+                    # timeout, and on_transcript acquires the same lock from the STT
+                    # listener thread -- holding it here would make mia deaf for the whole
+                    # request.
+                    recall_client.speak(
+                        base_url=config.recall_base_url,
+                        api_key=config.recall_api_key,
+                        bot_id=bot_id,
+                        mp3_bytes=audio,
+                    )
+                    with lock:
+                        # Audio starts playing once the POST is accepted, so the estimate
+                        # runs from here, not from before the request.
+                        playback_end_time[0] = time.monotonic() + playback_seconds
+                        playback_pending[0] = False
             except Exception as exc:
                 safe_log(
                     "error",
@@ -318,6 +338,7 @@ def _run_call_loop(
                 )
                 with lock:
                     turn_state.abandon_turn()
+                    playback_pending[0] = False
     finally:
         stt.stop()
 
