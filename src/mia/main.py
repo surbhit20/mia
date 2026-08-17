@@ -394,12 +394,15 @@ def _handle_join(
             state.set_status(meet_url, "skipped")
             return
 
-        attendee_client.set_avatar_image(
-            base_url=config.attendee_base_url,
-            api_key=config.attendee_api_key,
-            bot_id=bot_id,
-            image_path=_BOT_AVATAR_PATH,
-        )
+        try:
+            attendee_client.set_avatar_image(
+                base_url=config.attendee_base_url,
+                api_key=config.attendee_api_key,
+                bot_id=bot_id,
+                image_path=_BOT_AVATAR_PATH,
+            )
+        except Exception as exc:
+            safe_log("warning", "avatar image failed", meeting_url=meet_url, error=str(exc))
 
         safe_log("info", "joined meeting", meeting_url=meet_url)
         try:
