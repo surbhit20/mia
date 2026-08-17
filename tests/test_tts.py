@@ -4,7 +4,7 @@ from mia.tts import synthesize
 
 
 @patch("mia.tts.ElevenLabs")
-def test_synthesize_defaults_to_pcm_24000(mock_elevenlabs_class):
+def test_synthesize_defaults_to_pcm_16000(mock_elevenlabs_class):
     mock_client = MagicMock()
     mock_elevenlabs_class.return_value = mock_client
     mock_client.text_to_speech.convert.return_value = [b"chunk1", b"chunk2"]
@@ -15,7 +15,7 @@ def test_synthesize_defaults_to_pcm_24000(mock_elevenlabs_class):
     mock_client.text_to_speech.convert.assert_called_once_with(
         voice_id="21m00Tcm4TlvDq8ikWAM",
         text="hello",
-        output_format="pcm_24000",
+        output_format="pcm_16000",
     )
 
 
@@ -46,5 +46,5 @@ def test_synthesize_respects_voice_id_override(mock_elevenlabs_class):
     mock_client.text_to_speech.convert.assert_called_once_with(
         voice_id="custom-voice-id",
         text="hello",
-        output_format="pcm_24000",
+        output_format="pcm_16000",
     )
