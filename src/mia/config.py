@@ -29,6 +29,11 @@ class Config:
     wake_word: str = "hey mia"
     fuzzy_threshold: float = 0.75
     state_file: Path = field(default_factory=lambda: Path("~/.mia/state.json").expanduser())
+    recall_api_key: str = ""
+    recall_base_url: str = "https://us-west-2.recall.ai"
+    recall_websocket_port: int = 8765
+    recall_bot_name: str = "Mia"
+    recall_websocket_hostname: str = ""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -47,4 +52,9 @@ class Config:
             logfire_token=os.environ.get("LOGFIRE_TOKEN", ""),
             wake_word=os.environ.get("WAKE_WORD", "hey mia"),
             fuzzy_threshold=float(os.environ.get("FUZZY_THRESHOLD", "0.75")),
+            recall_api_key=os.environ.get("RECALL_API_KEY", ""),
+            recall_base_url=os.environ.get("RECALL_BASE_URL", "https://us-west-2.recall.ai"),
+            recall_websocket_port=int(os.environ.get("RECALL_WEBSOCKET_PORT", "8765")),
+            recall_bot_name=os.environ.get("RECALL_BOT_NAME", "Mia"),
+            recall_websocket_hostname=os.environ.get("RECALL_WEBSOCKET_HOSTNAME", ""),
         )

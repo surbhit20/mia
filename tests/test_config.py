@@ -45,3 +45,38 @@ def test_from_env_respects_wake_word_override(monkeypatch):
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("WAKE_WORD", "hey robot")
     assert Config.from_env().wake_word == "hey robot"
+
+def test_from_env_defaults_recall_settings_when_unset(monkeypatch):
+    for k, v in REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("RECALL_API_KEY", raising=False)
+    monkeypatch.delenv("RECALL_BASE_URL", raising=False)
+    monkeypatch.delenv("RECALL_WEBSOCKET_PORT", raising=False)
+    monkeypatch.delenv("RECALL_BOT_NAME", raising=False)
+    monkeypatch.delenv("RECALL_WEBSOCKET_HOSTNAME", raising=False)
+
+    config = Config.from_env()
+
+    assert config.recall_api_key == ""
+    assert config.recall_base_url == "https://us-west-2.recall.ai"
+    assert config.recall_websocket_port == 8765
+    assert config.recall_bot_name == "Mia"
+    assert config.recall_websocket_hostname == ""
+
+
+def test_from_env_respects_recall_overrides(monkeypatch):
+    for k, v in REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("RECALL_API_KEY", "rc-key")
+    monkeypatch.setenv("RECALL_BASE_URL", "https://example.recall.ai")
+    monkeypatch.setenv("RECALL_WEBSOCKET_PORT", "9999")
+    monkeypatch.setenv("RECALL_BOT_NAME", "Custom Bot")
+    monkeypatch.setenv("RECALL_WEBSOCKET_HOSTNAME", "mia-bridge.ngrok.app")
+
+    config = Config.from_env()
+
+    assert config.recall_api_key == "rc-key"
+    assert config.recall_base_url == "https://example.recall.ai"
+    assert config.recall_websocket_port == 9999
+    assert config.recall_bot_name == "Custom Bot"
+    assert config.recall_websocket_hostname == "mia-bridge.ngrok.app"
