@@ -45,3 +45,34 @@ def test_from_env_respects_wake_word_override(monkeypatch):
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("WAKE_WORD", "hey robot")
     assert Config.from_env().wake_word == "hey robot"
+
+def test_from_env_defaults_attendee_settings_when_unset(monkeypatch):
+    for k, v in REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("ATTENDEE_API_KEY", raising=False)
+    monkeypatch.delenv("ATTENDEE_BASE_URL", raising=False)
+    monkeypatch.delenv("ATTENDEE_WEBSOCKET_PORT", raising=False)
+    monkeypatch.delenv("ATTENDEE_BOT_NAME", raising=False)
+
+    config = Config.from_env()
+
+    assert config.attendee_api_key == ""
+    assert config.attendee_base_url == "http://localhost:8000"
+    assert config.attendee_websocket_port == 8765
+    assert config.attendee_bot_name == "Mia"
+
+
+def test_from_env_respects_attendee_overrides(monkeypatch):
+    for k, v in REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("ATTENDEE_API_KEY", "att-key")
+    monkeypatch.setenv("ATTENDEE_BASE_URL", "http://example.com:9000")
+    monkeypatch.setenv("ATTENDEE_WEBSOCKET_PORT", "9999")
+    monkeypatch.setenv("ATTENDEE_BOT_NAME", "Custom Bot")
+
+    config = Config.from_env()
+
+    assert config.attendee_api_key == "att-key"
+    assert config.attendee_base_url == "http://example.com:9000"
+    assert config.attendee_websocket_port == 9999
+    assert config.attendee_bot_name == "Custom Bot"
