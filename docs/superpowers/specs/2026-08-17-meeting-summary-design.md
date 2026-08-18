@@ -87,6 +87,33 @@ available.
 The roster also gives the summarizer an attendee list, so it can name who
 was present rather than inferring it from who happened to speak.
 
+### Invited attendees, as context only
+
+The calendar event behind the meeting already carries an `attendees` array
+with names and emails, and mia already fetches that event --
+`find_current_meeting_title` matches it by `hangoutLink` and keeps only the
+title. Extending it to return attendees costs no extra API call and no new
+scope.
+
+That list is passed to the summarizer as **context about who was invited**.
+It is deliberately NOT used to resolve a null `participant.name`.
+
+There is no signal linking a Recall participant id to a calendar attendee.
+Mapping "id 3" onto one of three invitees would be a guess, and a wrong
+guess is worse than the honest fallback: a summary that states "Sarah
+committed to sending the numbers" when Raj said it is an error the user will
+act on. `Speaker 3` is merely unhelpful; misattribution is harmful. The
+three-step resolution above stands unchanged.
+
+What the summarizer may do with the invite list is name a speaker where the
+transcript itself makes it unambiguous (an unnamed speaker addressed as
+"Sarah" in the next line), while leaving genuinely unidentifiable speakers
+under their stable labels. That inference belongs to the model reading the
+conversation, not to a fuzzy join on names in our code.
+
+The invite list also covers people who never speak, so the doc can record
+who was expected -- something the live roster alone cannot supply.
+
 **Ordering at meeting end: leave first, summarize second.** Recall bills for
 time in the call, so the bot must not sit in an empty meeting while Claude
 writes a summary.
@@ -146,7 +173,13 @@ class TranscriptLog:
 ### `src/mia/summary.py` (new)
 
 ```python
-def summarize(client, transcript_text: str, attendees: list[str], actions_taken: list[ToolCallResult]) -> str:
+def summarize(
+    client,
+    transcript_text: str,
+    present: list[str],        # live roster, from participant_events
+    invited: list[str],        # calendar attendees; context only
+    actions_taken: list[ToolCallResult],
+) -> str:
     """One Claude call returning the doc body as HTML. Needs its own
     max_tokens (dispatch_command's 256 is sized for a spoken sentence);
     an hour of meeting is on the order of 10k input tokens."""
@@ -180,9 +213,11 @@ def create_doc(drive_service, title: str, html_body: str) -> str:
 
 - `src/mia/recall_client.py` — transcript block in `create_bot`.
 - `src/mia/audio/recall_bridge.py` — route by event type; expose the log.
+- `src/mia/detection/calendar_enricher.py` — return the matched event's
+  attendee display names alongside the title, from the call it already makes.
 - `src/mia/main.py` — add the `drive.file` scope, build the Drive service,
-  accumulate `ToolCallResult`s in `_run_call_loop`, and generate the doc
-  after leaving.
+  accumulate `ToolCallResult`s in `_run_call_loop`, thread the invited
+  attendees through to the summarizer, and generate the doc after leaving.
 
 ## OAuth
 
