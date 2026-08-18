@@ -197,3 +197,18 @@ def test_a_transcript_parsing_failure_does_not_close_the_connection():
 
     assert bridge.routing_errors == 1
     assert bridge.stats()["routing_errors"] == 1
+
+
+def test_unrecognized_messages_are_sampled_for_diagnosis_but_bounded():
+    # A transcript Recall clearly produced that never reached the log is
+    # either an event we never received or one the parser rejected. Only the
+    # raw payload distinguishes them -- but meeting content must not
+    # accumulate without bound.
+    bridge = RecallAudioBridge(port=0, sample_rate=16000)
+
+    _run_messages(bridge, [json.dumps({"event": "mystery.event", "n": i}) for i in range(10)])
+
+    stats = bridge.stats()
+    assert stats["messages_unparsed"] == 10
+    assert len(stats["unparsed_samples"]) == 3
+    assert "mystery.event" in stats["unparsed_samples"][0]

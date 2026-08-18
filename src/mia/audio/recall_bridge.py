@@ -13,6 +13,9 @@ from mia.transcript import (
 
 _BYTES_PER_SAMPLE = 2  # 16-bit PCM
 
+# How many unrecognized messages to keep verbatim for diagnosis.
+_MAX_UNPARSED_SAMPLES = 3
+
 # How long a read waits for real audio before giving up and returning
 # silence.
 #
@@ -55,6 +58,7 @@ class RecallAudioBridge:
         self.connections = 0
         self.messages_received = 0
         self.messages_unparsed = 0
+        self.unparsed_samples: list[str] = []
         self.routing_errors = 0
 
         # Populated from the asyncio thread while the call runs; read once
@@ -145,6 +149,14 @@ class RecallAudioBridge:
             # this counter staying near zero is the signal that routing is
             # working.
             self.messages_unparsed += 1
+            # Keep the first few verbatim. A transcript that Recall clearly
+            # produced but that never reached the log is either an event we
+            # never received or one our parser rejected, and those need
+            # opposite fixes -- the raw payload is the only thing that tells
+            # them apart. Bounded so a persistent mismatch cannot flood the
+            # log or the process's memory with meeting content.
+            if len(self.unparsed_samples) < _MAX_UNPARSED_SAMPLES:
+                self.unparsed_samples.append(raw_message[:400])
 
     def stats(self) -> dict:
         """Counters for diagnosing a bot that appears deaf. `connections` at 0
@@ -158,6 +170,7 @@ class RecallAudioBridge:
             "messages_received": self.messages_received,
             "messages_unparsed": self.messages_unparsed,
             "routing_errors": self.routing_errors,
+            "unparsed_samples": self.unparsed_samples,
             "chunks_pushed": fb.chunks_pushed,
             "bytes_pushed": fb.bytes_pushed,
             "bytes_dropped": fb.bytes_dropped,
