@@ -34,7 +34,7 @@
 
 **Interfaces:**
 - Consumes: nothing from other tasks.
-- Produces: `Utterance` (frozen dataclass: `participant_id: int`, `speaker_name: str | None`, `text: str`); `extract_transcript_utterance(raw_message: str) -> Utterance | None`; `extract_participant_event(raw_message: str) -> tuple[int, str | None] | None`; `ParticipantRoster` (`.record(participant_id: int, name: str | None) -> None`, `.name_for(participant_id: int) -> str`, `.attendees() -> list[str]`); `TranscriptLog` (`.append(utterance: Utterance) -> None`, `.utterance_count() -> int`, `.render(roster: ParticipantRoster) -> str`). Tasks 3, 5, and 7 use these.
+- Produces: `Utterance` (frozen dataclass: `participant_id: int`, `speaker_name: str | None`, `text: str`); `extract_transcript_utterance(raw_message: str) -> Utterance | None`; `extract_participant_event(raw_message: str) -> tuple[int, str | None] | None`; `ParticipantRoster` (`.record(participant_id: int, name: str | None) -> None`, `.name_for(participant_id: int) -> str`, `.has_name(participant_id: int) -> bool`, `.attendees() -> list[str]`); `TranscriptLog` (`.append(utterance: Utterance) -> None`, `.utterance_count() -> int`, `.speaker_ids() -> set[int]`, `.render(roster: ParticipantRoster) -> str`). Tasks 3, 5, and 7 use these.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -176,6 +176,15 @@ def test_roster_ignores_null_name_and_keeps_known_one():
     assert roster.name_for(1) == "Sarah"
 
 
+def test_has_name_does_not_allocate_a_speaker_number():
+    # name_for() assigns lazily, so probing with it would consume labels out
+    # of order. has_name() must be a pure query.
+    roster = ParticipantRoster()
+
+    assert roster.has_name(42) is False
+    assert roster.name_for(7) == "Speaker 1"
+
+
 def test_roster_lists_known_attendees():
     roster = ParticipantRoster()
     roster.record(2, "Raj")
@@ -216,6 +225,17 @@ def test_log_resolves_a_name_that_arrived_after_the_utterance():
     roster.record(5, "Priya")
 
     assert log.render(roster) == "Priya: can everyone hear me"
+
+
+def test_log_reports_distinct_speaker_ids():
+    # Used to detect speakers the roster never named -- the signal that
+    # participant events are being missed in real meetings.
+    log = TranscriptLog()
+    log.append(Utterance(1, "Sarah", "hi"))
+    log.append(Utterance(1, "Sarah", "again"))
+    log.append(Utterance(4, None, "hello"))
+
+    assert log.speaker_ids() == {1, 4}
 
 
 def test_log_counts_utterances():
@@ -371,6 +391,17 @@ class ParticipantRoster:
                 self._next_label += 1
             return label
 
+    def has_name(self, participant_id: int) -> bool:
+        """Whether a real name is known, without allocating a label.
+
+        name_for() lazily assigns the next "Speaker N" as a side effect, so
+        callers that only want to *ask* must use this -- probing with
+        name_for() would hand out numbers in the caller's iteration order
+        rather than in order of first speech.
+        """
+        with self._lock:
+            return participant_id in self._names
+
     def attendees(self) -> list[str]:
         with self._lock:
             return sorted(self._names.values())
@@ -390,6 +421,10 @@ class TranscriptLog:
     def utterance_count(self) -> int:
         with self._lock:
             return len(self._utterances)
+
+    def speaker_ids(self) -> set[int]:
+        with self._lock:
+            return {utterance.participant_id for utterance in self._utterances}
 
     def render(self, roster: ParticipantRoster) -> str:
         """"Name: text" lines, consecutive utterances from one speaker merged.
@@ -422,7 +457,7 @@ class TranscriptLog:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/pytest tests/test_transcript.py -v`
-Expected: PASS (17 tests)
+Expected: PASS (21 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1314,6 +1349,21 @@ def _write_summary_doc(
             utterances=utterances,
         )
         return
+
+    # Whether participant events reliably cover people who were already in
+    # the meeting when the bot joined is unverified. Rather than build a REST
+    # backfill for a problem that may not exist, surface it: a persistent gap
+    # between speakers heard and names known is the signal to revisit.
+    speaker_ids = bridge.transcript_log.speaker_ids()
+    named = {pid for pid in speaker_ids if bridge.roster.has_name(pid)}
+    if len(named) < len(speaker_ids):
+        safe_log(
+            "info",
+            "some speakers were never named",
+            meeting_url=meet_url,
+            speakers=len(speaker_ids),
+            named=len(named),
+        )
 
     try:
         transcript_text = bridge.transcript_log.render(bridge.roster)
