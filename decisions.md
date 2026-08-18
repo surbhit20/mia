@@ -12,6 +12,92 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-18 — Action Items may be ticked only from executed tool calls, never inferred
+
+**Why:** The summary doc's checklist marks items mia completed. The obvious
+implementation — let the model read the transcript and decide what got done
+— produces confident false claims about the user's real calendar. So
+completion is sourced from `ToolCallResult`s mia actually executed, passed to
+the summarizer as ground truth, and the prompt forbids inferring completion
+from the transcript. The same list also deduplicates: a commitment both
+discussed and executed appears once, ticked, not twice.
+**What this cost to get right:** three separate review rounds each found a
+different way for a non-completion to reach the "ground truth" list.
+`tool_name is None` (mia spoke but ran no tool — including clarifying
+questions). Then a handler that *raised* still returned a `tool_name`, so a
+booking that failed on a Google error would have been ticked "done by Mia".
+Then read-only lookups (`find_calendar_events`, `find_gmail_messages`), which
+complete nothing. `ToolCallResult` now carries `succeeded` and `mutated`, and
+`Tool` carries `mutates`; all three must hold for an item to tick.
+**Alternatives considered:** string-matching the "Sorry, that didn't work"
+sentinel to detect failure — rejected as fragile. An allowlist of mutating
+tool names inside `summary.py` — rejected because it silently drifts whenever
+a tool is added.
+
+## 2026-08-18 — Reversal: mia now produces a post-meeting summary doc
+
+**Why:** Directly reverses "2026-08-12 — Pivot: live voice agent, not a
+transcript/summary pipeline", and relaxes the "no transcript ever persisted"
+principle. The reversal is bounded: the transcript streams over the websocket
+bridge already in place, accumulates in memory, and is discarded once the
+summary is written. What persists is the summary, in a Google Doc, never the
+record of who said what. Requested after the live-voice path was working, on
+the grounds that a meeting with no artifact wastes what mia already heard.
+**Alternatives considered:** Recall's post-meeting async transcription with
+"perfect diarization" — more accurate speaker labels, but it leaves a
+recording and transcript at rest on Recall's servers and needs polling.
+Local markdown file instead of a Doc — simplest and needs no new OAuth scope,
+but not shareable. Emailing the summary — rejected; it would escalate the
+Gmail scope from read-only to send-as-the-user.
+**Notable sub-decisions:** speaker labels fall back to a sequential
+`Speaker N` numbered by first appearance, never the raw Recall participant id
+(an opaque integer that renders as "Speaker 847293"), and never one shared
+"Unknown speaker" bucket — a single shared label reads to the summarizing
+model as one person saying everything. Calendar attendees are passed as
+context only and never mapped onto a participant id: nothing links them, and
+a confident misattribution is worse than an anonymous speaker.
+
+## 2026-08-17 — Reversal: replaced self-hosted Attendee.dev with Recall.ai
+
+**Why:** Reverses both "2026-08-12 — Build the Meet-join mechanism in-house
+(Playwright)" and the 2026-08-13 pivot to self-hosted Attendee, and abandons
+the founding constraint that meeting audio never leaves local control.
+Anonymous-guest joins through Attendee worked, then degraded over a single
+day of testing as Google's anti-abuse detection began auto-denying join
+requests — an inherent property of anonymous meeting-bot joins, not a defect
+in our code or Attendee's. Reliability was chosen over the privacy stance
+deliberately and explicitly.
+**Alternatives considered:** finishing the signed-in-bot/SAML path, which
+stays fully local — rejected after the Workspace trial, an auto-suspended bot
+account, and tunnel churn had already consumed days. Continuing with
+anonymous joins — rejected as unfixable from our side.
+**Consequences:** meeting audio now flows through Recall's cloud and is
+billed per minute. Recall's bot dials out to a websocket we host, so the
+bridge needs a real public `wss://` URL — a paid ngrok reserved domain, since
+the free `.ngrok-free.dev` tier is blocked on this network. Barge-in is lost:
+Recall has no interrupt/stop-audio API, so once a response is POSTed it plays
+to completion.
+
+## 2026-08-17 — Audio frames must be paced by real time, not by a network buffer
+
+**Why:** Non-obvious consequence of the Recall migration, and the root cause
+of mia responding to roughly one wake word in seven. `BlackHoleCapture` read a
+hardware input stream, which is paced by the sound card and physically cannot
+return a frame before that frame's audio has elapsed. `RecallAudioBridge`
+reads a network buffer, which has no such pacing. With the timeout derived
+from the frame size (32ms frame → 64ms) and Recall delivering ~200ms batches,
+the buffer ran dry between every batch and `pull()` substituted silence —
+measured at 44% of all frames during continuous speech, injected *into the
+middle* of live sentences on their way to Deepgram.
+**Second-order effect:** command capture ended on a count of consecutive
+non-speech *frames*, which only equals a duration if frames arrive at real
+time. Buffered audio draining at memory speed fired it early; a starved
+stream fired it late. Now measured in wall-clock seconds.
+**Alternatives considered:** raising the frame-derived multiplier — rejected;
+it hides the coupling rather than removing it. The starvation timeout is now
+an explicit constant tied to Recall's delivery cadence, and padding is what it
+should be: an emergency fallback for a dead stream, not routine behavior.
+
 ## 2026-08-14 — Investigated: barge-in "not working" in the demo was acoustics, not code
 
 **Why this matters:** After the Deepgram keepalive fix, barge-in still
