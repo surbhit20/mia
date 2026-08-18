@@ -27,7 +27,7 @@ from mia.audio.recall_bridge import RecallAudioBridge
 from mia.audio.vad import FrameVAD
 from mia.command_buffer import CommandBuffer
 from mia.config import Config
-from mia.detection.calendar_enricher import find_current_meeting_title
+from mia.detection.calendar_enricher import MeetingInfo, find_current_meeting
 from mia.detection.mic_monitor import is_mic_active
 from mia.detection.tab_detector import find_active_meet_tab
 from mia.detection.trigger import decide
@@ -608,13 +608,13 @@ def run() -> None:
                 # and the enricher's result would be thrown away -- which, for a
                 # call the user skipped, would otherwise be one wasted API call
                 # every poll for the meeting's whole duration.
-                calendar_title = None
+                meeting_info = MeetingInfo()
                 if (
                     mic_active
                     and meet_url is not None
                     and state.status(meet_url) is None
                 ):
-                    calendar_title = find_current_meeting_title(
+                    meeting_info = find_current_meeting(
                         calendar_service,
                         now=datetime.now(timezone.utc),
                         meet_url=meet_url,
@@ -623,7 +623,7 @@ def run() -> None:
                 decision = decide(
                     mic_active=mic_active,
                     meet_tab_url=meet_url,
-                    calendar_title=calendar_title,
+                    calendar_title=meeting_info.title,
                     state=state,
                 )
 
