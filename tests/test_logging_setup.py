@@ -18,14 +18,21 @@ def _config(logfire_token: str) -> Config:
 def test_configure_sends_to_logfire_when_a_token_is_set(mocker):
     mock_configure = mocker.patch("logfire.configure")
     configure(_config("lf-token"))
-    mock_configure.assert_called_once_with(token="lf-token")
+    kwargs = mock_configure.call_args.kwargs
+    assert kwargs["token"] == "lf-token"
+    # Fields must reach the console, not only Logfire -- a bare "audio stats"
+    # label with its counters hidden made a live meeting undebuggable from the
+    # terminal.
+    assert kwargs["console"].verbose is True
 
 
 def test_configure_disables_reporting_without_a_token(mocker):
     # Logfire is never a hard dependency: no token must not stop the bot.
     mock_configure = mocker.patch("logfire.configure")
     configure(_config(""))
-    mock_configure.assert_called_once_with(send_to_logfire=False)
+    kwargs = mock_configure.call_args.kwargs
+    assert kwargs["send_to_logfire"] is False
+    assert kwargs["console"].verbose is True
 
 
 def test_safe_log_is_a_no_op_when_reporting_is_disabled(recwarn):
