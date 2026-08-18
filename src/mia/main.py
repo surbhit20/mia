@@ -67,10 +67,22 @@ _FRAME_MS = 32
 # The leave check is time-throttled instead.
 _LEAVE_CHECK_INTERVAL_SECONDS = 3.0
 
-# tab_detector.find_active_meet_tab() returns None on an osascript timeout or
-# non-zero exit, so a single miss is not proof the call ended. Require two
-# consecutive misses before leaving.
-_LEAVE_CONFIRM_CHECKS = 2
+# How long the Meet tab may stay missing before mia leaves.
+#
+# A closed tab is not the same as a finished meeting: it may be an accidental
+# close, a browser crash, or a reload, and the user often comes back. So the
+# tab going away starts a timer rather than ending the call, and the tab
+# reappearing cancels it.
+#
+# This also subsumes the old two-consecutive-misses debounce, which existed
+# because find_active_meet_tab() returns None on an osascript timeout or
+# non-zero exit as well as on a genuinely closed tab. A spurious miss now
+# just starts a timer that the next successful scan cancels.
+#
+# A grace period does NOT leave mia parked in a dead meeting: if the call
+# actually ends, Recall reports call_ended/fatal and the status check above
+# breaks immediately, without waiting for this timer.
+_TAB_ABSENT_GRACE_SECONDS = 180.0
 
 # NOTE: the draft ended command capture on the first non-speech frame, which
 # cut every command off at its first natural pause -- and worse,
@@ -242,7 +254,7 @@ def _run_call_loop(
     stt.start()
     try:
         silence_started_at: float | None = None
-        missed_tab_checks = 0
+        tab_missing_since: float | None = None
         last_tab_check = time.monotonic()
 
         while True:
@@ -275,11 +287,31 @@ def _run_call_loop(
                     break
 
                 if find_active_meet_tab() == meet_url:
-                    missed_tab_checks = 0
+                    if tab_missing_since is not None:
+                        safe_log(
+                            "info",
+                            "meet tab returned, staying",
+                            meeting_url=meet_url,
+                            gone_for_seconds=round(now - tab_missing_since, 1),
+                        )
+                    tab_missing_since = None
                 else:
-                    missed_tab_checks += 1
-                    if missed_tab_checks >= _LEAVE_CONFIRM_CHECKS:
-                        safe_log("info", "leave signal", meeting_url=meet_url, reason="tab closed")
+                    if tab_missing_since is None:
+                        tab_missing_since = now
+                        safe_log(
+                            "info",
+                            "meet tab gone, grace period started",
+                            meeting_url=meet_url,
+                            grace_seconds=_TAB_ABSENT_GRACE_SECONDS,
+                        )
+                    elif now - tab_missing_since >= _TAB_ABSENT_GRACE_SECONDS:
+                        safe_log(
+                            "info",
+                            "leave signal",
+                            meeting_url=meet_url,
+                            reason="tab closed",
+                            gone_for_seconds=round(now - tab_missing_since, 1),
+                        )
                         break
 
             turn_state.tick()
