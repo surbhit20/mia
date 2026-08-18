@@ -125,6 +125,63 @@ def test_only_conversational_turns_reads_as_no_actions():
     assert "mia executed no tools" in _prompt_of(client)
 
 
+def test_failed_action_does_not_reach_the_prompt():
+    # A handler that raised still returns a ToolCallResult (e.g. a booking
+    # that failed on a Google error) -- succeeded=False must be excluded, or
+    # a failed booking gets ticked as done in the user's doc.
+    client = _client()
+
+    summarize(
+        client,
+        "Sarah: book us Thursday at 3",
+        ["Sarah"],
+        [],
+        [
+            ToolCallResult(
+                tool_name="block_calendar_slot",
+                confirmation="Sorry, that didn't work — try again?",
+                succeeded=False,
+                mutated=True,
+            ),
+            ToolCallResult(
+                tool_name="rename_calendar_event",
+                confirmation="Renamed to Budget review",
+                succeeded=True,
+                mutated=True,
+            ),
+        ],
+    )
+
+    prompt = _prompt_of(client)
+    assert "Sorry, that didn't work" not in prompt
+    assert "Renamed to Budget review" in prompt
+
+
+def test_readonly_action_does_not_reach_the_prompt():
+    # A lookup tool (find_calendar_events, find_gmail_messages) never
+    # changed anything, so it must not be offered as a completed action.
+    client = _client()
+
+    summarize(
+        client,
+        "Sarah: what's on my calendar",
+        ["Sarah"],
+        [],
+        [
+            ToolCallResult(
+                tool_name="find_calendar_events",
+                confirmation="You have 1 event: 'Standup' at 9 AM.",
+                succeeded=True,
+                mutated=False,
+            ),
+        ],
+    )
+
+    prompt = _prompt_of(client)
+    assert "Standup" not in prompt
+    assert "mia executed no tools" in prompt
+
+
 def test_prompt_forbids_guessing_speaker_identities():
     # The only enforcement of this rule is the prompt text itself, so deleting
     # it must break a test rather than silently changing behavior.

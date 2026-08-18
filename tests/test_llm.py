@@ -113,6 +113,51 @@ def test_handler_exception_returns_failure_notice():
     assert "didn't work" in result.confirmation
 
 
+def test_handler_exception_produces_succeeded_false():
+    registry = ToolRegistry()
+    def boom(args):
+        raise RuntimeError("api down")
+    registry.register(Tool(name="block_calendar_slot", description="d", input_schema={}, handler=boom))
+    client = MagicMock()
+    client.messages.create.return_value = _mock_tool_use_response("block_calendar_slot", {})
+    history = ConversationHistory()
+
+    result = dispatch_command(client, registry, "block time", history)
+
+    assert result.succeeded is False
+
+
+def test_successful_mutating_tool_reports_succeeded_and_mutated():
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="block_calendar_slot",
+        description="d",
+        input_schema={"type": "object", "properties": {}},
+        handler=lambda args: "blocked",
+        mutates=True,
+    ))
+    client = MagicMock()
+    client.messages.create.return_value = _mock_tool_use_response("block_calendar_slot", {})
+    history = ConversationHistory()
+
+    result = dispatch_command(client, registry, "block an hour", history)
+
+    assert result.succeeded is True
+    assert result.mutated is True
+
+
+def test_no_tool_use_path_reports_mutated_false():
+    registry = ToolRegistry()
+    client = MagicMock()
+    client.messages.create.return_value = _mock_text_only_response("Sure, I can do that.")
+    history = ConversationHistory()
+
+    result = dispatch_command(client, registry, "what can you do", history)
+
+    assert result.succeeded is True
+    assert result.mutated is False
+
+
 def test_second_call_includes_first_turn_in_history():
     registry = ToolRegistry()
     registry.register(Tool(

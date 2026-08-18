@@ -90,4 +90,5 @@ def build_gmail_search_tool(gmail_service, anthropic_client) -> Tool:
         ),
         input_schema=_SCHEMA,
         handler=handler,
+        mutates=False,
     )

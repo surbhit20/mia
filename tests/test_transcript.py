@@ -195,6 +195,18 @@ def test_log_reports_distinct_speaker_ids():
     assert log.speaker_ids() == {1, 4}
 
 
+def test_speaker_ids_named_on_utterances_ignores_unnamed_and_roster_only_names():
+    # Resolution step 1 uses the name carried on the utterance itself, which
+    # is never written to the roster -- so a caller checking "did we ever
+    # learn who this was" must consult this set too, not just the roster.
+    log = TranscriptLog()
+    log.append(Utterance(1, "Sarah", "hi"))
+    log.append(Utterance(2, None, "hello"))
+    log.append(Utterance(3, "Priya", "hey"))
+
+    assert log.speaker_ids_named_on_utterances() == {1, 3}
+
+
 def test_log_counts_utterances():
     log = TranscriptLog()
     log.append(Utterance(1, "Sarah", "hi"))

@@ -7,6 +7,11 @@ class Tool:
     description: str
     input_schema: dict
     handler: Callable[[dict], str]
+    # Whether running this tool changes something in the world. Read-only
+    # lookups are not "actions completed" for the post-meeting summary.
+    # Defaults True so a newly added tool shows up as checklist noise rather
+    # than being silently omitted from what mia reports she did.
+    mutates: bool = True
 
 class ToolRegistry:
     def __init__(self):

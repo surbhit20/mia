@@ -170,6 +170,15 @@ class TranscriptLog:
         with self._lock:
             return {utterance.participant_id for utterance in self._utterances}
 
+    def speaker_ids_named_on_utterances(self) -> set[int]:
+        """Ids that arrived with a name on the utterance itself.
+
+        Resolution step 1 never touches the roster, so a caller asking "did we
+        ever learn who this was" must consult this as well as the roster.
+        """
+        with self._lock:
+            return {u.participant_id for u in self._utterances if u.speaker_name}
+
     def render(self, roster: ParticipantRoster) -> str:
         """"Name: text" lines, consecutive utterances from one speaker merged.
 

@@ -91,4 +91,5 @@ def build_calendar_fetch_tool(calendar_service) -> Tool:
         ),
         input_schema=_SCHEMA,
         handler=handler,
+        mutates=False,
     )

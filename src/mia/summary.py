@@ -16,11 +16,21 @@ _SYSTEM = (
 
 
 def _format_actions(actions_taken: list[ToolCallResult]) -> str:
-    # Only turns that actually ran a tool are completions. dispatch_command
-    # returns tool_name=None for turns where mia merely spoke -- a reply, or a
-    # clarifying question -- and feeding those in as "already completed" is how
-    # a question becomes a ticked item in the user's doc.
-    executed = [action for action in actions_taken if action.tool_name is not None]
+    # Only turns that actually ran a tool AND succeeded AND mutated something
+    # are completions. dispatch_command returns tool_name=None for turns
+    # where mia merely spoke -- a reply, or a clarifying question -- and
+    # feeding those in as "already completed" is how a question becomes a
+    # ticked item in the user's doc. A handler that raised still returns a
+    # ToolCallResult (e.g. block_calendar_slot failing on a Google error), so
+    # succeeded=False must also be excluded, or a failed booking gets ticked
+    # as done. And a read-only lookup (find_calendar_events,
+    # find_gmail_messages) never changed anything, so mutated=False is
+    # excluded too -- looking something up is not completing it.
+    executed = [
+        action
+        for action in actions_taken
+        if action.tool_name is not None and action.succeeded and action.mutated
+    ]
     if not executed:
         return "(none -- mia executed no tools during this meeting)"
     return "\n".join(
@@ -43,7 +53,7 @@ def summarize(
     """
     prompt = (
         "Summarize this meeting.\n\n"
-        f"People detected speaking: {', '.join(present) or 'unknown'}\n"
+        f"People present in the meeting: {', '.join(present) or 'unknown'}\n"
         f"People invited on the calendar: {', '.join(invited) or 'unknown'}\n\n"
         "The invited list is context about who was expected. Do NOT use it to "
         "guess the identity of a speaker labelled 'Speaker <number>' -- those "

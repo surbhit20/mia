@@ -165,3 +165,35 @@ def test_unrecognized_events_are_counted_not_raised():
     _run_messages(bridge, [json.dumps({"event": "participant_events.leave", "data": {}})])
 
     assert bridge.stats()["messages_unparsed"] == 1
+
+
+def test_a_transcript_parsing_failure_does_not_close_the_connection():
+    # Regression: before this branch the non-audio fall-through was a plain
+    # counter increment, which cannot raise. The transcript/participant
+    # parsers introduced here run on the same connection the live audio path
+    # depends on, so an exception here must never propagate out of
+    # _handle_connection and close the websocket -- that would deafen the
+    # bot for the rest of a billed meeting.
+    from unittest.mock import patch
+
+    bridge = RecallAudioBridge(port=0, sample_rate=16000)
+    message = json.dumps(
+        {
+            "event": "transcript.data",
+            "data": {
+                "data": {
+                    "words": [{"text": "hello"}],
+                    "participant": {"id": 1, "name": "Sarah"},
+                }
+            },
+        }
+    )
+
+    with patch(
+        "mia.audio.recall_bridge.extract_transcript_utterance",
+        side_effect=RuntimeError("boom"),
+    ):
+        _run_messages(bridge, [message])  # must not raise
+
+    assert bridge.routing_errors == 1
+    assert bridge.stats()["routing_errors"] == 1

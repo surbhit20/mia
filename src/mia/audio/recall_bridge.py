@@ -55,6 +55,7 @@ class RecallAudioBridge:
         self.connections = 0
         self.messages_received = 0
         self.messages_unparsed = 0
+        self.routing_errors = 0
 
         # Populated from the asyncio thread while the call runs; read once
         # from the main thread after it ends. Both are in-memory only.
@@ -122,14 +123,22 @@ class RecallAudioBridge:
                 self._frame_buffer.push(chunk)
                 continue
 
-            utterance = extract_transcript_utterance(raw_message)
-            if utterance is not None:
-                self.transcript_log.append(utterance)
-                continue
+            try:
+                utterance = extract_transcript_utterance(raw_message)
+                if utterance is not None:
+                    self.transcript_log.append(utterance)
+                    continue
 
-            participant = extract_participant_event(raw_message)
-            if participant is not None:
-                self.roster.record(*participant)
+                participant = extract_participant_event(raw_message)
+                if participant is not None:
+                    self.roster.record(*participant)
+                    continue
+            except Exception:
+                # The transcript is a nice-to-have; this websocket also
+                # carries the live audio the call loop depends on. Never let
+                # a parsing failure close the connection and deafen the bot
+                # mid-meeting.
+                self.routing_errors += 1
                 continue
 
             # Event families we do not subscribe to should never arrive, so
@@ -148,6 +157,7 @@ class RecallAudioBridge:
             "connections": self.connections,
             "messages_received": self.messages_received,
             "messages_unparsed": self.messages_unparsed,
+            "routing_errors": self.routing_errors,
             "chunks_pushed": fb.chunks_pushed,
             "bytes_pushed": fb.bytes_pushed,
             "bytes_dropped": fb.bytes_dropped,

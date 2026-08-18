@@ -10,6 +10,8 @@ from mia.tools.base import ToolRegistry
 class ToolCallResult:
     tool_name: str | None
     confirmation: str
+    succeeded: bool = True
+    mutated: bool = True
 
 
 class ConversationHistory:
@@ -113,18 +115,23 @@ def dispatch_command(
         return ToolCallResult(
             tool_name=None,
             confirmation=spoken or "Sorry, I didn't catch a command I can act on.",
+            succeeded=True,
+            mutated=False,
         )
 
     tool = registry.get(tool_use_block.name)
+    succeeded = True
     if tool is None:
         confirmation = "Sorry, that didn't work — try again?"
         safe_log("error", "tool not found in registry", tool_name=tool_use_block.name)
+        succeeded = False
     else:
         try:
             confirmation = tool.handler(tool_use_block.input)
         except Exception as exc:
             confirmation = "Sorry, that didn't work — try again?"
             safe_log("error", "tool handler failed", tool_name=tool.name, error=str(exc))
+            succeeded = False
 
     tool_result_message = {
         "role": "user",
@@ -140,4 +147,6 @@ def dispatch_command(
     return ToolCallResult(
         tool_name=tool.name if tool is not None else tool_use_block.name,
         confirmation=confirmation,
+        succeeded=succeeded,
+        mutated=(tool.mutates if tool is not None else False),
     )

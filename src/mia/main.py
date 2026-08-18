@@ -151,30 +151,49 @@ def _write_summary_doc(
     Runs after the bot has already left. Every failure here is logged and
     swallowed: the meeting is over, and nothing downstream depends on this.
     """
-    utterances = bridge.transcript_log.utterance_count()
-    if utterances < _MIN_UTTERANCES_FOR_SUMMARY:
-        safe_log(
-            "info",
-            "skipping summary, too little was said",
-            meeting_url=meet_url,
-            utterances=utterances,
-        )
-        return
+    # This whole prologue runs inside a `finally` block further up the call
+    # stack (see the call site below). An exception raised inside a `finally`
+    # discards whatever exception was already in flight -- including a
+    # KeyboardInterrupt -- and it would then be swallowed by the outer
+    # `except Exception`, leaving the operator unable to Ctrl-C out of a
+    # call. Keep this section side-effect-safe by catching broadly and
+    # bailing out rather than letting anything here propagate.
+    try:
+        utterances = bridge.transcript_log.utterance_count()
+        if utterances < _MIN_UTTERANCES_FOR_SUMMARY:
+            safe_log(
+                "info",
+                "skipping summary, too little was said",
+                meeting_url=meet_url,
+                utterances=utterances,
+            )
+            return
 
-    # Whether participant events reliably cover people who were already in
-    # the meeting when the bot joined is unverified. Rather than build a REST
-    # backfill for a problem that may not exist, surface it: a persistent gap
-    # between speakers heard and names known is the signal to revisit.
-    speaker_ids = bridge.transcript_log.speaker_ids()
-    named = {pid for pid in speaker_ids if bridge.roster.has_name(pid)}
-    if len(named) < len(speaker_ids):
-        safe_log(
-            "info",
-            "some speakers were never named",
-            meeting_url=meet_url,
-            speakers=len(speaker_ids),
-            named=len(named),
-        )
+        # Whether participant events reliably cover people who were already
+        # in the meeting when the bot joined is unverified. Rather than
+        # build a REST backfill for a problem that may not exist, surface
+        # it: a persistent gap between speakers heard and names known is the
+        # signal to revisit. Name resolution's first step is the name
+        # carried on the utterance itself (never written to the roster), so
+        # a speaker must be checked against both sources before being
+        # counted as unnamed -- otherwise this logs a false gap on every
+        # meeting where names arrive via transcript.data but participant
+        # events never do, even though the document renders every name
+        # correctly.
+        speaker_ids = bridge.transcript_log.speaker_ids()
+        named = {pid for pid in speaker_ids if bridge.roster.has_name(pid)}
+        named |= bridge.transcript_log.speaker_ids_named_on_utterances()
+        if len(named) < len(speaker_ids):
+            safe_log(
+                "info",
+                "some speakers were never named",
+                meeting_url=meet_url,
+                speakers=len(speaker_ids),
+                named=len(named),
+            )
+    except Exception as exc:
+        safe_log("error", "summary preflight failed", meeting_url=meet_url, error=str(exc))
+        return
 
     try:
         transcript_text = bridge.transcript_log.render(bridge.roster)
@@ -202,7 +221,7 @@ def _write_summary_doc(
         _SUMMARY_FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
         safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title).strip()
         path = _SUMMARY_FALLBACK_DIR / f"{datetime.now().date().isoformat()}-{safe_title}.html"
-        path.write_text(html)
+        path.write_text(html, encoding="utf-8")
         safe_log("info", "summary written locally instead", meeting_url=meet_url, path=str(path))
     except Exception as exc:
         safe_log("error", "summary fallback write failed", meeting_url=meet_url, error=str(exc))
