@@ -16,10 +16,15 @@ _SYSTEM = (
 
 
 def _format_actions(actions_taken: list[ToolCallResult]) -> str:
-    if not actions_taken:
+    # Only turns that actually ran a tool are completions. dispatch_command
+    # returns tool_name=None for turns where mia merely spoke -- a reply, or a
+    # clarifying question -- and feeding those in as "already completed" is how
+    # a question becomes a ticked item in the user's doc.
+    executed = [action for action in actions_taken if action.tool_name is not None]
+    if not executed:
         return "(none -- mia executed no tools during this meeting)"
     return "\n".join(
-        f"- tool={action.tool_name} result={action.confirmation}" for action in actions_taken
+        f"- tool={action.tool_name} result={action.confirmation}" for action in executed
     )
 
 
