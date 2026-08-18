@@ -116,7 +116,19 @@ def summarize(client, transcript_text: str, actions_taken: list[ToolCallResult])
 ```
 
 Output structure: a prose summary, then a single `Action Items` checklist
-where executed items are ticked and attributed to mia.
+where executed items are ticked and attributed to mia. Rendered shape:
+
+    <h1>Budget sync - 17 Aug 2026</h1>
+    <p>Sarah walked through Q3 numbers ...</p>
+    <h2>Action Items</h2>
+    <ul>
+      <li>[x] Create "Budget review", Thursday 3 PM - done by Mia</li>
+      <li>[ ] Sarah to send the Q3 spreadsheet</li>
+      <li>[ ] Follow up with legal on the vendor contract</li>
+    </ul>
+
+One list, not two. An item is ticked only when it corresponds to an executed
+tool call.
 
 ### `src/mia/gdoc.py` (new)
 
@@ -150,8 +162,11 @@ No failure here may break the meeting or the leave path.
 - **Trivial transcript** (fewer than 5 utterances): no doc, one log line.
   Prevents a Doc for every 30-second test call.
 - **Summarization fails**: logged; leave already happened.
-- **Drive fails**: fall back to writing `~/.mia/summaries/<date>-<title>.md`
-  and log the path, so a transient API error never destroys the summary.
+- **Drive fails**: fall back to writing
+  `~/.mia/summaries/<date>-<title>.html` and log the path, so a transient API
+  error never destroys the summary. The extension is `.html`, matching what
+  summarize() returns -- the fallback stores the same bytes that would have
+  been uploaded, with no lossy conversion step to get wrong.
 - **Null participant names**: rendered as "Unknown speaker" rather than
   dropped -- an unattributed utterance still carries meaning.
 
