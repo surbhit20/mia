@@ -20,12 +20,6 @@ transcript is held in memory for the duration of the call and discarded once
 the summary is written. What persists is the summary, not the record of who
 said what.
 
-**Consent is an open matter, deliberately left out of scope.** Capturing
-every participant means recording people who are not the user, and some
-jurisdictions require all-party consent. A silent bot named "Mia" is not
-disclosure. A spoken self-announcement on join is recommended as a follow-up
-(see Out of Scope).
-
 ## Architecture
 
 Transcript capture reuses the websocket bridge already built and tested for
@@ -192,9 +186,8 @@ it is verified by the suite passing plus a live meeting.
 
 - **Persisting the transcript.** Held in memory, discarded after the summary.
 - **The transcript in the doc.** Summary only.
-- **Auto-sharing with attendees.** The Doc is private. Sharing distributes a
-  record of other people's speech and should be the user's deliberate act.
-- **A spoken self-announcement on join.** Recommended as a follow-up now that
-  meetings are being summarized, but a separate change to join behavior.
+- **Auto-sharing with attendees.** The Doc is created private to the user,
+  who shares it from Drive if they want to. Automatic sharing would need
+  attendee email addresses, which mia does not currently collect.
 - **Non-English meetings.** `language_code: "en"`; multilingual is a later
   configuration question.
