@@ -8,6 +8,18 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 class WakeWordMatcher:
+    """Fuzzy wake-word detection over a sliding window of the transcript.
+
+    Scoring uses fuzz.ratio, NOT fuzz.partial_ratio. partial_ratio finds the
+    best-matching substring and ignores everything around it, so a longer word
+    that happens to contain the right letters scores as high as the real
+    phrase: "t(he mi)gration" hit 77 against "hey mia" and woke mia in the
+    middle of a live meeting. No threshold fixes that -- a genuine attempt
+    misheard as "hemia" scored 75, BELOW the false positive. fuzz.ratio
+    compares whole strings, so extra characters cost score, which separates
+    real attempts (80-100) from incidental matches (29-60) with room to spare.
+    """
+
     def __init__(self, wake_word: str, threshold: float = 0.75):
         self._wake_word = _normalize(wake_word)
         self._window_size = len(self._wake_word.split())
@@ -16,10 +28,10 @@ class WakeWordMatcher:
     def matches(self, text: str) -> bool:
         words = _normalize(text).split()
         if len(words) < self._window_size:
-            return fuzz.partial_ratio(" ".join(words), self._wake_word) >= self._threshold_pct
+            return fuzz.ratio(" ".join(words), self._wake_word) >= self._threshold_pct
         for i in range(len(words) - self._window_size + 1):
             window = " ".join(words[i : i + self._window_size])
-            if fuzz.partial_ratio(window, self._wake_word) >= self._threshold_pct:
+            if fuzz.ratio(window, self._wake_word) >= self._threshold_pct:
                 return True
         return False
 
@@ -34,7 +46,7 @@ class WakeWordMatcher:
         words = _normalize(text).split()
         for i in range(max(len(words) - self._window_size + 1, 1)):
             window = " ".join(words[i : i + self._window_size])
-            if fuzz.partial_ratio(window, self._wake_word) >= self._threshold_pct:
+            if fuzz.ratio(window, self._wake_word) >= self._threshold_pct:
                 return " ".join(words[:i] + words[i + self._window_size :])
         return " ".join(words)
 

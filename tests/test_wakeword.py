@@ -7,7 +7,18 @@ def test_exact_match():
 def test_phonetic_mishearing_matches():
     m = WakeWordMatcher("hey bot")
     assert m.matches("hay bot can you help") is True
-    assert m.matches("a bot please block this") is True
+
+
+def test_dropping_the_first_word_entirely_no_longer_matches():
+    # Deliberate trade-off, made after mia woke on "the migration" mid-meeting
+    # and talked over the room. "a bot" keeps only one word of the wake phrase,
+    # which is too little evidence to justify interrupting a live meeting: a
+    # false wake costs everyone in the call, a missed one costs the speaker a
+    # repeat. Real mishearings that keep both words ("hay bot", "hemia") still
+    # match comfortably.
+    m = WakeWordMatcher("hey bot")
+
+    assert m.matches("a bot please block this") is False
 
 def test_unrelated_text_does_not_match():
     m = WakeWordMatcher("hey bot")
@@ -57,3 +68,28 @@ def test_is_self_echo_threshold_is_configurable():
     transcript = "meting confirmd"
     assert is_self_echo(transcript, spoken, threshold=0.5) is True
     assert is_self_echo(transcript, spoken, threshold=0.95) is False
+
+
+def test_does_not_wake_on_words_that_merely_contain_the_sounds():
+    # Found live: "the bigger risk is the migration" woke mia mid-sentence and
+    # she started talking over the meeting. fuzz.partial_ratio finds the best
+    # matching SUBSTRING and ignores everything around it, so "t(he mi)gration"
+    # scored 77 against "hey mia" -- above threshold. No threshold could fix
+    # it: a real attempt heard as "hemia" scored 75, i.e. lower than the false
+    # positive. The metric had to change, not the number.
+    matcher = WakeWordMatcher("hey mia", threshold=0.75)
+
+    assert matcher.matches("the bigger risk is the migration") is False
+    assert matcher.matches("someone needs to chase raj about the migration before monday") is False
+    assert matcher.matches("media") is False
+    assert matcher.matches("the meeting") is False
+
+
+def test_still_wakes_on_real_attempts_including_mishearings():
+    matcher = WakeWordMatcher("hey mia", threshold=0.75)
+
+    assert matcher.matches("hey mia") is True
+    assert matcher.matches("Hey, Mia.") is True
+    assert matcher.matches("hey mia block thirty minutes at six pm") is True
+    assert matcher.matches("hemia") is True          # heard live, run 3
+    assert matcher.matches("hey maya") is True
