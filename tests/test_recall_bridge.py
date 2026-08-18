@@ -88,3 +88,80 @@ def test_read_frame_does_not_fabricate_silence_at_recall_chunk_cadence():
         f"{padded_share:.0%} of frames were silence-padded while audio was "
         f"arriving continuously ({fb.pulls_padded}/{fb.pulls_served})"
     )
+
+
+import asyncio
+import json
+
+
+def _run_messages(bridge, messages):
+    """Drive _handle_connection with a fake websocket yielding `messages`."""
+
+    class _FakeWebsocket:
+        def __aiter__(self):
+            async def _gen():
+                for message in messages:
+                    yield message
+
+            return _gen()
+
+    asyncio.run(bridge._handle_connection(_FakeWebsocket()))
+
+
+def test_transcript_messages_land_in_the_transcript_log():
+    bridge = RecallAudioBridge(port=0, sample_rate=16000)
+    message = json.dumps(
+        {
+            "event": "transcript.data",
+            "data": {
+                "data": {
+                    "words": [{"text": "hello"}],
+                    "participant": {"id": 1, "name": "Sarah"},
+                }
+            },
+        }
+    )
+
+    _run_messages(bridge, [message])
+
+    assert bridge.transcript_log.utterance_count() == 1
+    assert bridge.transcript_log.render(bridge.roster) == "Sarah: hello"
+
+
+def test_participant_events_populate_the_roster():
+    bridge = RecallAudioBridge(port=0, sample_rate=16000)
+    message = json.dumps(
+        {
+            "event": "participant_events.join",
+            "data": {"data": {"participant": {"id": 4, "name": "Raj"}}},
+        }
+    )
+
+    _run_messages(bridge, [message])
+
+    assert bridge.roster.name_for(4) == "Raj"
+
+
+def test_audio_still_reaches_the_frame_buffer():
+    # Regression: routing must not break the path the call loop depends on.
+    import base64
+
+    bridge = RecallAudioBridge(port=0, sample_rate=16000)
+    message = json.dumps(
+        {
+            "event": "audio_mixed_raw.data",
+            "data": {"data": {"buffer": base64.b64encode(b"\x01\x02" * 480).decode("ascii")}},
+        }
+    )
+
+    _run_messages(bridge, [message])
+
+    assert bridge.read_frame(frame_ms=30) == b"\x01\x02" * 480
+
+
+def test_unrecognized_events_are_counted_not_raised():
+    bridge = RecallAudioBridge(port=0, sample_rate=16000)
+
+    _run_messages(bridge, [json.dumps({"event": "participant_events.leave", "data": {}})])
+
+    assert bridge.stats()["messages_unparsed"] == 1

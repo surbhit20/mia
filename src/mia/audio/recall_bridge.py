@@ -4,6 +4,12 @@ import threading
 import websockets
 
 from mia.audio.recall_framing import FrameBuffer, extract_mixed_audio_chunk
+from mia.transcript import (
+    ParticipantRoster,
+    TranscriptLog,
+    extract_participant_event,
+    extract_transcript_utterance,
+)
 
 _BYTES_PER_SAMPLE = 2  # 16-bit PCM
 
@@ -49,6 +55,11 @@ class RecallAudioBridge:
         self.connections = 0
         self.messages_received = 0
         self.messages_unparsed = 0
+
+        # Populated from the asyncio thread while the call runs; read once
+        # from the main thread after it ends. Both are in-memory only.
+        self.transcript_log = TranscriptLog()
+        self.roster = ParticipantRoster()
 
     def __enter__(self) -> "RecallAudioBridge":
         ready = threading.Event()
@@ -105,13 +116,26 @@ class RecallAudioBridge:
         self.connections += 1
         async for raw_message in websocket:
             self.messages_received += 1
+
             chunk = extract_mixed_audio_chunk(raw_message)
             if chunk is not None:
                 self._frame_buffer.push(chunk)
-            else:
-                # Non-audio events (participant joins, etc.) land here too,
-                # so this is only alarming when it accounts for most traffic.
-                self.messages_unparsed += 1
+                continue
+
+            utterance = extract_transcript_utterance(raw_message)
+            if utterance is not None:
+                self.transcript_log.append(utterance)
+                continue
+
+            participant = extract_participant_event(raw_message)
+            if participant is not None:
+                self.roster.record(*participant)
+                continue
+
+            # Event families we do not subscribe to should never arrive, so
+            # this counter staying near zero is the signal that routing is
+            # working.
+            self.messages_unparsed += 1
 
     def stats(self) -> dict:
         """Counters for diagnosing a bot that appears deaf. `connections` at 0
