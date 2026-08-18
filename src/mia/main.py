@@ -22,6 +22,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from mia import recall_client
+from mia.ack import acknowledgment_mp3
 from mia.audio.recall_bridge import RecallAudioBridge
 from mia.audio.vad import FrameVAD
 from mia.command_buffer import CommandBuffer
@@ -334,6 +335,26 @@ def _run_call_loop(
                     with lock:
                         turn_state.abandon_turn()
                 else:
+                    # Deliberately after the bare-wake-phrase check above, not
+                    # at command capture: the matcher is loose enough to fire
+                    # on stray speech, and acking a false trigger would
+                    # announce "On it." into the meeting and then go quiet.
+                    #
+                    # speak() returns once Recall accepts the clip, not when
+                    # playback ends, so this plays in the meeting while Claude
+                    # is already working below.
+                    try:
+                        recall_client.speak(
+                            base_url=config.recall_base_url,
+                            api_key=config.recall_api_key,
+                            bot_id=bot_id,
+                            mp3_bytes=acknowledgment_mp3(config.elevenlabs_api_key),
+                        )
+                    except Exception as exc:
+                        # Never fail a turn over the acknowledgment -- falling
+                        # through just restores the previous silent behavior.
+                        safe_log("warning", "ack playback failed", meeting_url=meet_url, error=str(exc))
+
                     result = dispatch_command(anthropic_client, registry, command_text, history)
                     safe_log(
                         "info",
@@ -441,6 +462,20 @@ def _handle_join(
                 )
                 joined = True
                 safe_log("info", "joined meeting", meeting_url=meet_url)
+
+                try:
+                    # Warm the acknowledgment clip now. A cache miss during a
+                    # command would cost ~1s of ElevenLabs latency, which is
+                    # the delay the acknowledgment exists to hide.
+                    acknowledgment_mp3(config.elevenlabs_api_key)
+                except Exception as exc:
+                    safe_log(
+                        "warning",
+                        "ack clip warm-up failed",
+                        meeting_url=meet_url,
+                        error=str(exc),
+                    )
+
                 _run_call_loop(config, registry, anthropic_client, meet_url, bridge, bot_id)
             except Exception as exc:
                 safe_log(
