@@ -40,7 +40,12 @@ to a second event:
       {
         "type": "websocket",
         "url": "<wss url>",
-        "events": ["audio_mixed_raw.data", "transcript.data"]
+        "events": [
+          "audio_mixed_raw.data",
+          "transcript.data",
+          "participant_events.join",
+          "participant_events.update"
+        ]
       }
     ]
   }
@@ -52,7 +57,35 @@ handled for audio, carrying `words[]` and a `participant` object whose `name`
 may be null.
 
 The bridge routes by event type: audio chunks to the existing `FrameBuffer`,
-utterances to a new in-memory `TranscriptLog`.
+utterances to a new in-memory `TranscriptLog`, and participant events to a
+`ParticipantRoster`.
+
+### Speaker naming
+
+A summary is only as useful as its attribution. "Sarah agreed to send the
+numbers" is actionable; "someone agreed to send the numbers" is not.
+
+`transcript.data` carries `participant.name`, but it may be null. Names are
+therefore resolved in three steps, in order:
+
+1. the name on the utterance itself;
+2. the `ParticipantRoster`, keyed by `participant.id`, populated from
+   `participant_events.join` and `.update`;
+3. a stable `Speaker <id>` label.
+
+**Resolution happens at render time, not on arrival.**
+`participant_events.update` fires when a participant's details resolve after
+they joined, so deferring lets a real name attach retroactively to lines
+they spoke while still anonymous.
+
+Step 3 is not cosmetic. Collapsing every unnamed participant into one
+"Unknown speaker" label reads to the summarizing model as a single person
+saying everything, which destroys the structure of the conversation. A
+stable per-id label keeps speakers distinct even when no name is ever
+available.
+
+The roster also gives the summarizer an attendee list, so it can name who
+was present rather than inferring it from who happened to speak.
 
 **Ordering at meeting end: leave first, summarize second.** Recall bills for
 time in the call, so the bot must not sit in an empty meeting while Claude
@@ -83,7 +116,8 @@ They serve two purposes:
 ```python
 @dataclass(frozen=True)
 class Utterance:
-    speaker: str      # participant.name, or "Unknown speaker" when null
+    participant_id: int
+    speaker_name: str | None   # as given on the utterance; often null
     text: str
 
 def extract_transcript_utterance(raw_message: str) -> Utterance | None:
@@ -91,19 +125,28 @@ def extract_transcript_utterance(raw_message: str) -> Utterance | None:
     an unparseable message, or a malformed shape -- never raises. Mirrors
     the defensive contract of extract_mixed_audio_chunk."""
 
+class ParticipantRoster:
+    """Thread-safe id -> name map, fed by participant_events.join/.update."""
+    def record(self, participant_id: int, name: str | None) -> None: ...
+    def name_for(self, participant_id: int) -> str: ...  # falls back to
+                                                         # "Speaker <id>"
+    def attendees(self) -> list[str]: ...
+
 class TranscriptLog:
     """Thread-safe, in-memory, append-only. Written from the bridge's
     asyncio thread, read once from the main thread after the call ends."""
     def append(self, utterance: Utterance) -> None: ...
     def utterance_count(self) -> int: ...
-    def render(self) -> str: ...   # "Speaker: text" lines, consecutive
-                                   # utterances from one speaker merged
+    def render(self, roster: ParticipantRoster) -> str: ...
+        # "Name: text" lines, consecutive utterances from one speaker
+        # merged. Takes the roster so names resolve at render time, after
+        # every .update has landed.
 ```
 
 ### `src/mia/summary.py` (new)
 
 ```python
-def summarize(client, transcript_text: str, actions_taken: list[ToolCallResult]) -> str:
+def summarize(client, transcript_text: str, attendees: list[str], actions_taken: list[ToolCallResult]) -> str:
     """One Claude call returning the doc body as HTML. Needs its own
     max_tokens (dispatch_command's 256 is sized for a spoken sentence);
     an hour of meeting is on the order of 10k input tokens."""
@@ -161,8 +204,9 @@ No failure here may break the meeting or the leave path.
   error never destroys the summary. The extension is `.html`, matching what
   summarize() returns -- the fallback stores the same bytes that would have
   been uploaded, with no lossy conversion step to get wrong.
-- **Null participant names**: rendered as "Unknown speaker" rather than
-  dropped -- an unattributed utterance still carries meaning.
+- **Null participant names**: resolved via the roster, then as
+  `Speaker <id>`. Never dropped, and never collapsed into a single shared
+  label -- see Speaker naming.
 
 ## Testing
 
@@ -170,9 +214,12 @@ Unit tests for each new module:
 
 - `transcript.py` — parser accepts a valid `transcript.data`, returns None
   for other events, unparseable JSON, non-dict `data.data`, and missing
-  `words`; null `participant.name` becomes "Unknown speaker";
-  `TranscriptLog` accumulates in order and merges consecutive same-speaker
-  utterances.
+  `words`. `ParticipantRoster` returns a joined participant's name, falls
+  back to a stable "Speaker <id>" for an unknown id, and lets a later
+  `.update` overwrite a null name. `TranscriptLog` accumulates in order,
+  merges consecutive same-speaker utterances, and -- the regression that
+  matters -- resolves a name that only arrived *after* the utterance was
+  appended.
 - `summary.py` — mocked Claude; assert the transcript and the executed
   actions both reach the prompt, and that the prompt instructs the
   dedup/tick rule.
