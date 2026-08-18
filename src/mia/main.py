@@ -69,20 +69,24 @@ _LEAVE_CHECK_INTERVAL_SECONDS = 3.0
 
 # How long the Meet tab may stay missing before mia leaves.
 #
-# A closed tab is not the same as a finished meeting: it may be an accidental
-# close, a browser crash, or a reload, and the user often comes back. So the
-# tab going away starts a timer rather than ending the call, and the tab
-# reappearing cancels it.
+# Short on purpose. Leaving is cheap to undo: the leave path calls
+# state.clear(), which removes the URL from the store entirely, and decide()
+# only suppresses prompts for statuses in _HANDLED_STATUSES. So a cleared URL
+# becomes eligible again, and reopening the tab with the mic live re-prompts
+# on the next detection poll (~5s). Coming back costs a fresh prompt and
+# rejoin, not a lost session -- which is worth more than keeping a paid bot
+# parked in a call nobody is in.
 #
-# This also subsumes the old two-consecutive-misses debounce, which existed
-# because find_active_meet_tab() returns None on an osascript timeout or
-# non-zero exit as well as on a genuinely closed tab. A spurious miss now
-# just starts a timer that the next successful scan cancels.
+# It is still a timer rather than an instant leave, because
+# find_active_meet_tab() returns None on an osascript timeout or non-zero
+# exit as well as on a genuinely closed tab. A spurious miss starts a timer
+# that the next good scan cancels, which is why this also replaced the older
+# two-consecutive-misses debounce.
 #
 # A grace period does NOT leave mia parked in a dead meeting: if the call
 # actually ends, Recall reports call_ended/fatal and the status check above
 # breaks immediately, without waiting for this timer.
-_TAB_ABSENT_GRACE_SECONDS = 180.0
+_TAB_ABSENT_GRACE_SECONDS = 15.0
 
 # NOTE: the draft ended command capture on the first non-speech frame, which
 # cut every command off at its first natural pause -- and worse,
