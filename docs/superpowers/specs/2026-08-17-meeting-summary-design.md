@@ -71,7 +71,9 @@ therefore resolved in three steps, in order:
 1. the name on the utterance itself;
 2. the `ParticipantRoster`, keyed by `participant.id`, populated from
    `participant_events.join` and `.update`;
-3. a stable `Speaker <id>` label.
+3. a stable `Speaker N` label, numbered sequentially in order of first
+   appearance -- **not** the raw `participant.id`, which is an opaque integer
+   and would render as "Speaker 847293".
 
 **Resolution happens at render time, not on arrival.**
 `participant_events.update` fires when a participant's details resolve after
@@ -155,8 +157,9 @@ def extract_transcript_utterance(raw_message: str) -> Utterance | None:
 class ParticipantRoster:
     """Thread-safe id -> name map, fed by participant_events.join/.update."""
     def record(self, participant_id: int, name: str | None) -> None: ...
-    def name_for(self, participant_id: int) -> str: ...  # falls back to
-                                                         # "Speaker <id>"
+    def name_for(self, participant_id: int) -> str: ...
+        # Falls back to "Speaker N", numbered in order of first appearance
+        # and stable per participant_id thereafter.
     def attendees(self) -> list[str]: ...
 
 class TranscriptLog:
@@ -239,9 +242,9 @@ No failure here may break the meeting or the leave path.
   error never destroys the summary. The extension is `.html`, matching what
   summarize() returns -- the fallback stores the same bytes that would have
   been uploaded, with no lossy conversion step to get wrong.
-- **Null participant names**: resolved via the roster, then as
-  `Speaker <id>`. Never dropped, and never collapsed into a single shared
-  label -- see Speaker naming.
+- **Null participant names**: resolved via the roster, then as a sequential
+  `Speaker N`. Never dropped, and never collapsed into a single shared label
+  -- see Speaker naming.
 
 ## Testing
 
@@ -250,7 +253,7 @@ Unit tests for each new module:
 - `transcript.py` — parser accepts a valid `transcript.data`, returns None
   for other events, unparseable JSON, non-dict `data.data`, and missing
   `words`. `ParticipantRoster` returns a joined participant's name, falls
-  back to a stable "Speaker <id>" for an unknown id, and lets a later
+  back to a sequential "Speaker N" for an unknown id, and lets a later
   `.update` overwrite a null name. `TranscriptLog` accumulates in order,
   merges consecutive same-speaker utterances, and -- the regression that
   matters -- resolves a name that only arrived *after* the utterance was

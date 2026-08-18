@@ -17,7 +17,7 @@
 - Recall rejects a realtime endpoint referencing an artifact that is not also declared in `recording_config` (error: "Cannot specify realtime endpoint events for artifacts that are not configured"). Every event family used must have its config block.
 - Transcript provider is `recallai_streaming` with `mode: "prioritize_accuracy"` and `language_code: "en"`.
 - Incoming websocket payloads use a doubly-nested `data.data` shape for every event type.
-- Speaker names resolve in this order: the name on the utterance, then the roster by `participant.id`, then a stable `Speaker <id>` label. Resolution happens at **render time**, never on arrival.
+- Speaker names resolve in this order: the name on the utterance, then the roster by `participant.id`, then a stable `Speaker N` label numbered in order of first appearance. Never render the raw `participant.id` — it is an opaque integer. Resolution happens at **render time**, never on arrival.
 - Calendar attendees are passed to the summarizer as context only. Never map a calendar attendee onto a Recall `participant.id`.
 - An Action Item may be ticked **only** if it corresponds to an executed `ToolCallResult`. Never infer completion from the transcript.
 - Leave the call before summarizing. Recall bills for time in the call.
@@ -132,14 +132,33 @@ def test_participant_event_ignores_unrelated_events():
     assert extract_participant_event("not json") is None
 
 
-def test_roster_falls_back_to_stable_per_speaker_label():
-    # Distinct labels matter: collapsing every unnamed person into one shared
-    # label reads to the summarizing model as a single person saying
+def test_roster_numbers_unnamed_speakers_in_order_of_first_appearance():
+    # Labels are sequential, not the raw participant id -- Recall's ids are
+    # opaque integers, so interpolating them gives "Speaker 847293".
+    roster = ParticipantRoster()
+
+    assert roster.name_for(847293) == "Speaker 1"
+    assert roster.name_for(12) == "Speaker 2"
+
+
+def test_roster_label_is_stable_for_the_same_participant():
+    # Distinct, stable labels matter: collapsing every unnamed person into one
+    # shared label reads to the summarizing model as a single person saying
     # everything, which destroys the structure of the conversation.
     roster = ParticipantRoster()
 
-    assert roster.name_for(3) == "Speaker 3"
-    assert roster.name_for(7) == "Speaker 7"
+    first = roster.name_for(99)
+    roster.name_for(100)
+
+    assert roster.name_for(99) == first
+
+
+def test_a_named_participant_never_consumes_a_speaker_number():
+    roster = ParticipantRoster()
+    roster.record(1, "Sarah")
+
+    assert roster.name_for(1) == "Sarah"
+    assert roster.name_for(2) == "Speaker 1"
 
 
 def test_roster_returns_recorded_name():
@@ -318,6 +337,8 @@ class ParticipantRoster:
 
     def __init__(self):
         self._names: dict[int, str] = {}
+        self._labels: dict[int, str] = {}
+        self._next_label = 1
         self._lock = threading.Lock()
 
     def record(self, participant_id: int, name: str | None) -> None:
@@ -329,14 +350,26 @@ class ParticipantRoster:
             self._names[participant_id] = name
 
     def name_for(self, participant_id: int) -> str:
-        """A display name, falling back to a stable per-speaker label.
+        """A display name, falling back to a sequential "Speaker N" label.
 
-        The fallback is per-id on purpose. One shared "Unknown speaker" label
-        would read to the summarizing model as a single person saying
-        everything.
+        The fallback is per-participant on purpose. One shared "Unknown
+        speaker" label would read to the summarizing model as a single person
+        saying everything.
+
+        The number counts unnamed speakers in order of first appearance
+        rather than interpolating participant_id, which is an opaque integer
+        from Recall and would render as "Speaker 847293".
         """
         with self._lock:
-            return self._names.get(participant_id) or f"Speaker {participant_id}"
+            known = self._names.get(participant_id)
+            if known:
+                return known
+            label = self._labels.get(participant_id)
+            if label is None:
+                label = f"Speaker {self._next_label}"
+                self._labels[participant_id] = label
+                self._next_label += 1
+            return label
 
     def attendees(self) -> list[str]:
         with self._lock:
