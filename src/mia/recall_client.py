@@ -37,13 +37,18 @@ def create_bot(base_url: str, api_key: str, meeting_url: str, websocket_url: str
                 # this key is rejected with "Cannot specify realtime endpoint
                 # events for artifacts that are not configured".
                 "audio_mixed_raw": {},
-                # Same rule for transcript.data. prioritize_accuracy over
-                # prioritize_low_latency because nothing waits on these --
-                # they are summarized after the call, not spoken during it.
+                # Same rule for transcript.data. prioritize_low_latency,
+                # NOT prioritize_accuracy: accuracy mode defers finalizing
+                # utterances, and the bridge disconnects at hangup, so they
+                # were never delivered at all. Measured live -- 691 websocket
+                # messages in one call, 689 of them audio, exactly 1 utterance
+                # reaching the log while Recall's stored transcript held the
+                # whole meeting. Latency is irrelevant here (nothing waits on
+                # these), but arriving before the call ends is not.
                 "transcript": {
                     "provider": {
                         "recallai_streaming": {
-                            "mode": "prioritize_accuracy",
+                            "mode": "prioritize_low_latency",
                             "language_code": "en",
                         }
                     },

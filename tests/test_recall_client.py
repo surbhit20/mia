@@ -31,7 +31,7 @@ def test_create_bot_posts_correct_payload_and_returns_id(mock_post):
                 "transcript": {
                     "provider": {
                         "recallai_streaming": {
-                            "mode": "prioritize_accuracy",
+                            "mode": "prioritize_low_latency",
                             "language_code": "en",
                         }
                     },
