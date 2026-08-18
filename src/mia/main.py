@@ -31,12 +31,14 @@ from mia.detection.calendar_enricher import MeetingInfo, find_current_meeting
 from mia.detection.mic_monitor import is_mic_active
 from mia.detection.tab_detector import find_active_meet_tab
 from mia.detection.trigger import decide
-from mia.llm import ConversationHistory, dispatch_command
+from mia.gdoc import create_doc
+from mia.llm import ConversationHistory, ToolCallResult, dispatch_command
 from mia.logging_setup import configure as configure_logging
 from mia.logging_setup import safe_log
 from mia.notify import NotificationResult, prompt_join
 from mia.state import StateStore
 from mia.stt import StreamingSTT
+from mia.summary import summarize
 from mia.tools.base import ToolRegistry
 from mia.tools.calendar_cancel_tool import build_cancel_calendar_event_tool
 from mia.tools.calendar_fetch_tool import build_calendar_fetch_tool
@@ -51,6 +53,11 @@ _TOKEN_PATH = Path("~/.mia/token.json").expanduser()
 _SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/gmail.readonly",
+    # Narrowest scope that works: access only to files mia creates, never the
+    # user's existing Drive. _authorize_google already detects a widened
+    # scope list against the cached token and forces fresh consent, so the
+    # next run re-prompts by itself.
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
 # Outer detection poll interval.
@@ -123,6 +130,84 @@ def _estimate_playback_seconds(mp3_bytes: bytes) -> float:
     return len(mp3_bytes) * 8 / _MP3_BITRATE_BITS_PER_SECOND
 
 
+# Below this, a "meeting" is a test call or a room where nobody spoke, and a
+# summary would be noise in the user's Drive.
+_MIN_UTTERANCES_FOR_SUMMARY = 5
+
+_SUMMARY_FALLBACK_DIR = Path("~/.mia/summaries").expanduser()
+
+
+def _write_summary_doc(
+    drive_service,
+    anthropic_client: Anthropic,
+    bridge: RecallAudioBridge,
+    meet_url: str,
+    title: str,
+    invited: list[str],
+    actions_taken: list[ToolCallResult],
+) -> None:
+    """Summarize the meeting and put it in the user's Drive.
+
+    Runs after the bot has already left. Every failure here is logged and
+    swallowed: the meeting is over, and nothing downstream depends on this.
+    """
+    utterances = bridge.transcript_log.utterance_count()
+    if utterances < _MIN_UTTERANCES_FOR_SUMMARY:
+        safe_log(
+            "info",
+            "skipping summary, too little was said",
+            meeting_url=meet_url,
+            utterances=utterances,
+        )
+        return
+
+    # Whether participant events reliably cover people who were already in
+    # the meeting when the bot joined is unverified. Rather than build a REST
+    # backfill for a problem that may not exist, surface it: a persistent gap
+    # between speakers heard and names known is the signal to revisit.
+    speaker_ids = bridge.transcript_log.speaker_ids()
+    named = {pid for pid in speaker_ids if bridge.roster.has_name(pid)}
+    if len(named) < len(speaker_ids):
+        safe_log(
+            "info",
+            "some speakers were never named",
+            meeting_url=meet_url,
+            speakers=len(speaker_ids),
+            named=len(named),
+        )
+
+    try:
+        transcript_text = bridge.transcript_log.render(bridge.roster)
+        html = summarize(
+            anthropic_client,
+            transcript_text,
+            bridge.roster.attendees(),
+            invited,
+            actions_taken,
+        )
+    except Exception as exc:
+        safe_log("error", "summary generation failed", meeting_url=meet_url, error=str(exc))
+        return
+
+    try:
+        url = create_doc(drive_service, title, html)
+        safe_log("info", "summary doc created", meeting_url=meet_url, doc_url=url)
+        return
+    except Exception as exc:
+        safe_log("error", "summary doc creation failed", meeting_url=meet_url, error=str(exc))
+
+    # Drive failed, but the summary already exists -- write the same bytes
+    # locally rather than throwing the work away over a transient API error.
+    try:
+        _SUMMARY_FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
+        safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title).strip()
+        path = _SUMMARY_FALLBACK_DIR / f"{datetime.now().date().isoformat()}-{safe_title}.html"
+        path.write_text(html)
+        safe_log("info", "summary written locally instead", meeting_url=meet_url, path=str(path))
+    except Exception as exc:
+        safe_log("error", "summary fallback write failed", meeting_url=meet_url, error=str(exc))
+
+
 def _save_credentials(creds: Credentials) -> None:
     _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     _TOKEN_PATH.write_text(creds.to_json())
@@ -179,6 +264,7 @@ def _run_call_loop(
     meet_url: str,
     bridge: RecallAudioBridge,
     bot_id: str,
+    actions_taken: list[ToolCallResult],
 ) -> None:
     turn_state = TurnStateMachine()
     wake_word = WakeWordMatcher(config.wake_word, threshold=config.fuzzy_threshold)
@@ -398,6 +484,7 @@ def _run_call_loop(
                         tool=result.tool_name,
                         meeting_url=meet_url,
                     )
+                    actions_taken.append(result)
                     audio = synthesize(
                         config.elevenlabs_api_key, result.confirmation, output_format="mp3_44100_128"
                     )
@@ -454,9 +541,13 @@ def _handle_join(
     config: Config,
     registry: ToolRegistry,
     anthropic_client: Anthropic,
+    drive_service,
     state: StateStore,
     meet_url: str,
+    meeting_info: MeetingInfo,
 ) -> None:
+    actions_taken: list[ToolCallResult] = []
+    doc_title = meeting_info.title or f"Meeting {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     missing = [
         name
         for name, value in (
@@ -512,7 +603,9 @@ def _handle_join(
                         error=str(exc),
                     )
 
-                _run_call_loop(config, registry, anthropic_client, meet_url, bridge, bot_id)
+                _run_call_loop(
+                    config, registry, anthropic_client, meet_url, bridge, bot_id, actions_taken
+                )
             except Exception as exc:
                 safe_log(
                     "error",
@@ -536,6 +629,17 @@ def _handle_join(
                 if joined:
                     state.clear(meet_url)
                     safe_log("info", "left meeting", meeting_url=meet_url)
+                    # After leave(), never before: Recall bills for time in
+                    # the call, and summarizing takes seconds.
+                    _write_summary_doc(
+                        drive_service,
+                        anthropic_client,
+                        bridge,
+                        meet_url,
+                        doc_title,
+                        meeting_info.attendees,
+                        actions_taken,
+                    )
                 else:
                     state.set_status(meet_url, "skipped")
     except Exception as exc:
@@ -564,6 +668,7 @@ def run() -> None:
     creds = _authorize_google(config)
     calendar_service = build("calendar", "v3", credentials=creds)
     gmail_service = build("gmail", "v1", credentials=creds)
+    drive_service = build("drive", "v3", credentials=creds)
     anthropic_client = Anthropic(api_key=config.anthropic_api_key)
     registry = ToolRegistry()
     registry.register(build_calendar_tool(calendar_service))
@@ -640,8 +745,10 @@ def run() -> None:
                             config,
                             registry,
                             anthropic_client,
+                            drive_service,
                             state,
                             decision.meeting_url,
+                            meeting_info,
                         )
                     else:
                         safe_log(
