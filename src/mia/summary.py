@@ -78,7 +78,12 @@ def summarize(
         "- If a commitment in the transcript matches a completed action, list "
         "it once as the completed item. Never list the same commitment twice.\n"
         "- Attribute an item to a person when the transcript makes the owner "
-        "clear."
+        "clear.\n"
+        "- An action item is something a person committed to doing. A question "
+        "that was asked and answered during the meeting is not one, and "
+        "neither is a request Mia declined as outside what she can do -- if "
+        "someone asked her for the weather and she said she cannot help with "
+        "that, nothing is outstanding. Leave both out of the list entirely."
     )
 
     response = client.messages.create(

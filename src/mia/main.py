@@ -117,7 +117,10 @@ _SILENCE_SECONDS_TO_END_COMMAND = 1.2
 # meeting -- checked alongside the existing tab-based leave signal so a
 # bot removed by another participant (or a fatal error) is also noticed,
 # not just a locally-closed Chrome tab.
-_BOT_LEFT_STATES = {"call_ended", "fatal"}
+# Observed live, in order, on a normal shutdown: call_ended -> recording_done
+# -> done. All of them mean the bot is out of the call, so all of them end the
+# loop and all of them make a failed leave() expected rather than alarming.
+_BOT_LEFT_STATES = {"call_ended", "fatal", "recording_done", "done"}
 
 # speak() is a single REST call, not a streamed connection -- there is no
 # "audio finished playing" acknowledgment from Recall's API. Estimate
@@ -644,7 +647,41 @@ def _handle_join(
                             bot_id=bot_id,
                         )
                     except Exception as leave_exc:
-                        safe_log("error", "leave failed", meeting_url=meet_url, error=str(leave_exc))
+                        # A bot that already left cannot be told to leave, and
+                        # that is the normal ending: the user closes the tab,
+                        # Meet ends the call, Recall tears the bot down, and
+                        # only then does this fire. Logging that at error level
+                        # makes a REAL leave failure -- the kind that strands a
+                        # billed bot in a live meeting -- indistinguishable
+                        # from routine shutdown noise. Ask what the bot is
+                        # actually doing before deciding which this was.
+                        already_gone = False
+                        try:
+                            already_gone = recall_client.bot_state(
+                                base_url=config.recall_base_url,
+                                api_key=config.recall_api_key,
+                                bot_id=bot_id,
+                                timeout_seconds=5.0,
+                            ) in _BOT_LEFT_STATES
+                        except Exception:
+                            # Cannot tell -- assume the worst, since the
+                            # expensive mistake is staying quiet about a bot
+                            # still sitting in someone's meeting.
+                            already_gone = False
+
+                        if already_gone:
+                            safe_log(
+                                "info",
+                                "bot had already left before leave was called",
+                                meeting_url=meet_url,
+                            )
+                        else:
+                            safe_log(
+                                "error",
+                                "leave failed, bot may still be in the meeting",
+                                meeting_url=meet_url,
+                                error=str(leave_exc),
+                            )
                 if joined:
                     state.clear(meet_url)
                     safe_log("info", "left meeting", meeting_url=meet_url)

@@ -192,3 +192,16 @@ def test_prompt_forbids_guessing_speaker_identities():
     prompt = _prompt_of(client)
     assert "Do NOT use it to" in prompt
     assert "unambiguous" in prompt
+
+
+def test_prompt_excludes_answered_questions_and_declined_requests():
+    # Found in live testing: asking mia for the weather -- which she correctly
+    # declined as out of scope -- still produced "[ ] Check today's weather" in
+    # the doc's Action Items. A request nobody committed to is not a to-do.
+    client = _client()
+
+    summarize(client, "Surbhit: hey mia what's the weather", ["Surbhit"], [], [])
+
+    prompt = _prompt_of(client)
+    assert "An action item is something a person committed to doing" in prompt
+    assert "Leave both out of the list entirely." in prompt
