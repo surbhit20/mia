@@ -17,11 +17,16 @@ def _mock_tool_use_response(tool_name, tool_input, block_id="toolu_1"):
     return response
 
 
-def _mock_text_only_response():
-    block = MagicMock()
-    block.type = "text"
+def _mock_text_only_response(*texts):
+    # Claude may split a reply across several text blocks.
+    blocks = []
+    for t in (texts or ("Your next meeting is at 3pm.",)):
+        block = MagicMock()
+        block.type = "text"
+        block.text = t
+        blocks.append(block)
     response = MagicMock()
-    response.content = [block]
+    response.content = blocks
     return response
 
 
@@ -50,13 +55,44 @@ def test_dispatches_to_matching_tool():
     assert local_timezone_label() in kwargs["system"]
 
 
-def test_no_tool_use_returns_fallback():
+def test_no_tool_use_speaks_claudes_own_reply():
+    # Previously any non-tool response was replaced with a canned "I didn't
+    # catch a command" line, which threw away real answers -- clarifying
+    # questions, capability answers, and follow-ups all became that string.
     registry = ToolRegistry()
     client = MagicMock()
-    client.messages.create.return_value = _mock_text_only_response()
+    client.messages.create.return_value = _mock_text_only_response(
+        "Did you mean today at 3pm, or tomorrow?"
+    )
     history = ConversationHistory()
 
-    result = dispatch_command(client, registry, "what's the weather", history)
+    result = dispatch_command(client, registry, "block 3pm", history)
+
+    assert result.tool_name is None
+    assert result.confirmation == "Did you mean today at 3pm, or tomorrow?"
+
+
+def test_no_tool_use_joins_multiple_text_blocks():
+    registry = ToolRegistry()
+    client = MagicMock()
+    client.messages.create.return_value = _mock_text_only_response(
+        "I can manage your calendar", " and search your email."
+    )
+    history = ConversationHistory()
+
+    result = dispatch_command(client, registry, "what can you do", history)
+
+    assert result.confirmation == "I can manage your calendar and search your email."
+
+
+def test_no_tool_use_with_empty_text_falls_back():
+    # Only a genuinely empty reply should produce the canned line.
+    registry = ToolRegistry()
+    client = MagicMock()
+    client.messages.create.return_value = _mock_text_only_response("   ")
+    history = ConversationHistory()
+
+    result = dispatch_command(client, registry, "...", history)
 
     assert result.tool_name is None
     assert "didn't catch" in result.confirmation

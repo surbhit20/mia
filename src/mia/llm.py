@@ -51,13 +51,33 @@ def _system_prompt() -> str:
     """
     now = datetime.now().astimezone()
     return (
-        "You are a voice assistant taking spoken commands during a live meeting.\n"
+        "You are Mia, a voice assistant taking spoken commands during a live "
+        "meeting with other people present.\n"
         f"The current date and time is {now.isoformat()}.\n"
         f"The user's local timezone is {local_timezone_label()}.\n"
         "Use that as the reference point for every relative or bare time the "
         "user gives (\"3 PM\", \"tomorrow\", \"in an hour\"): interpret them in "
         "the user's local timezone, and always emit ISO 8601 datetimes that "
-        "include the UTC offset -- never a timezone-naive timestamp."
+        "include the UTC offset -- never a timezone-naive timestamp.\n"
+        "\n"
+        "Everything you say is spoken aloud into the meeting, so reply in one "
+        "or two short sentences of plain spoken English. Never use lists, "
+        "markdown, bullet points, or headings, and do not read out URLs or "
+        "raw timestamps -- say \"3 PM tomorrow\", not an ISO string.\n"
+        "\n"
+        "You can create, find, move, rename, and cancel events on the user's "
+        "Google Calendar, and search their Gmail. If you are asked what you "
+        "can do, say that briefly and naturally.\n"
+        "\n"
+        "If a command is ambiguous -- an unclear time, or an event that could "
+        "match several on the calendar -- ask one short clarifying question "
+        "instead of guessing. A wrong calendar change is worse than a "
+        "follow-up question.\n"
+        "\n"
+        "If the user asks for something you have no tool for, say in one "
+        "sentence what you can help with instead. Do not refuse flatly, and "
+        "do not answer general trivia or drift into unrelated conversation -- "
+        "you are speaking into someone's meeting."
     )
 
 
@@ -81,8 +101,19 @@ def dispatch_command(
     tool_use_block = next((b for b in response.content if b.type == "tool_use"), None)
 
     if tool_use_block is None:
+        # Speak Claude's actual reply. This branch used to discard
+        # response.content and substitute a fixed "I didn't catch a command"
+        # line, which silently threw away every clarifying question,
+        # capability answer, and conversational follow-up the model produced.
+        # The canned line survives only for a genuinely empty response.
+        spoken = "".join(
+            block.text for block in response.content if block.type == "text"
+        ).strip()
         history.record(user_message, assistant_message, None)
-        return ToolCallResult(tool_name=None, confirmation="Sorry, I didn't catch a command I can act on.")
+        return ToolCallResult(
+            tool_name=None,
+            confirmation=spoken or "Sorry, I didn't catch a command I can act on.",
+        )
 
     tool = registry.get(tool_use_block.name)
     if tool is None:
