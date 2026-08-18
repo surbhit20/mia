@@ -28,8 +28,26 @@ def test_create_bot_posts_correct_payload_and_returns_id(mock_post):
             "bot_name": "Mia",
             "recording_config": {
                 "audio_mixed_raw": {},
+                "transcript": {
+                    "provider": {
+                        "recallai_streaming": {
+                            "mode": "prioritize_accuracy",
+                            "language_code": "en",
+                        }
+                    },
+                    "diarization": {"use_separate_streams_when_available": True},
+                },
                 "realtime_endpoints": [
-                    {"type": "websocket", "url": "wss://example.ngrok.app/audio", "events": ["audio_mixed_raw.data"]},
+                    {
+                        "type": "websocket",
+                        "url": "wss://example.ngrok.app/audio",
+                        "events": [
+                            "audio_mixed_raw.data",
+                            "transcript.data",
+                            "participant_events.join",
+                            "participant_events.update",
+                        ],
+                    },
                 ],
             },
         },

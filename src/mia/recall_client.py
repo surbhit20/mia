@@ -37,8 +37,31 @@ def create_bot(base_url: str, api_key: str, meeting_url: str, websocket_url: str
                 # this key is rejected with "Cannot specify realtime endpoint
                 # events for artifacts that are not configured".
                 "audio_mixed_raw": {},
+                # Same rule for transcript.data. prioritize_accuracy over
+                # prioritize_low_latency because nothing waits on these --
+                # they are summarized after the call, not spoken during it.
+                "transcript": {
+                    "provider": {
+                        "recallai_streaming": {
+                            "mode": "prioritize_accuracy",
+                            "language_code": "en",
+                        }
+                    },
+                    "diarization": {"use_separate_streams_when_available": True},
+                },
                 "realtime_endpoints": [
-                    {"type": "websocket", "url": websocket_url, "events": ["audio_mixed_raw.data"]},
+                    {
+                        "type": "websocket",
+                        "url": websocket_url,
+                        "events": [
+                            "audio_mixed_raw.data",
+                            "transcript.data",
+                            # Names are frequently null on transcript.data;
+                            # these supply the roster used to resolve them.
+                            "participant_events.join",
+                            "participant_events.update",
+                        ],
+                    },
                 ],
             },
         },
