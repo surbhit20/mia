@@ -32,6 +32,7 @@ from mia.detection.mic_monitor import is_mic_active
 from mia.detection.tab_detector import find_active_meet_tab
 from mia.detection.trigger import decide
 from mia.gdoc import create_doc
+from mia.mailer import email_summary
 from mia.llm import ConversationHistory, ToolCallResult, dispatch_command
 from mia.logging_setup import configure as configure_logging
 from mia.logging_setup import safe_log
@@ -58,6 +59,9 @@ _SCOPES = [
     # scope list against the cached token and forces fresh consent, so the
     # next run re-prompts by itself.
     "https://www.googleapis.com/auth/drive.file",
+    # Send-only. Grants no read access beyond the gmail.readonly above, and
+    # mailer.py only ever addresses the authenticated user.
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 # Outer detection poll interval.
@@ -140,12 +144,29 @@ _MIN_UTTERANCES_FOR_SUMMARY = 5
 _SUMMARY_FALLBACK_DIR = Path("~/.mia/summaries").expanduser()
 
 
+def _summary_subject(title: str | None, when: datetime) -> str:
+    """Subject line naming the meeting the way the user would refer to it.
+
+    Prefers the calendar title; falls back to the start time, since an ad-hoc
+    call has no name and "today's 9am meeting" is how someone would actually
+    describe it. Bare-hour times read as "9am", not "9:00am".
+    """
+    if title:
+        return f"Summary from today's {title}"
+    hour = when.strftime("%I").lstrip("0") or "12"
+    meridiem = when.strftime("%p").lower()
+    clock = hour if when.minute == 0 else f"{hour}:{when.strftime('%M')}"
+    return f"Summary from today's {clock}{meridiem} meeting"
+
+
 def _write_summary_doc(
     drive_service,
+    gmail_service,
     anthropic_client: Anthropic,
     bridge: RecallAudioBridge,
     meet_url: str,
     title: str,
+    meeting_title: str | None,
     invited: list[str],
     actions_taken: list[ToolCallResult],
 ) -> None:
@@ -161,6 +182,8 @@ def _write_summary_doc(
     # `except Exception`, leaving the operator unable to Ctrl-C out of a
     # call. Keep this section side-effect-safe by catching broadly and
     # bailing out rather than letting anything here propagate.
+    subject = _summary_subject(meeting_title, datetime.now())
+
     try:
         utterances = bridge.transcript_log.utterance_count()
         if utterances < _MIN_UTTERANCES_FOR_SUMMARY:
@@ -214,6 +237,15 @@ def _write_summary_doc(
     try:
         url = create_doc(drive_service, title, html)
         safe_log("info", "summary doc created", meeting_url=meet_url, doc_url=url)
+        _email_summary_safely(
+            gmail_service,
+            drive_service,
+            meet_url,
+            subject,
+            doc_id=url.split("/d/")[1].split("/")[0],
+            doc_title=title,
+            html=html,
+        )
         return
     except Exception as exc:
         safe_log("error", "summary doc creation failed", meeting_url=meet_url, error=str(exc))
@@ -226,8 +258,50 @@ def _write_summary_doc(
         path = _SUMMARY_FALLBACK_DIR / f"{datetime.now().date().isoformat()}-{safe_title}.html"
         path.write_text(html, encoding="utf-8")
         safe_log("info", "summary written locally instead", meeting_url=meet_url, path=str(path))
+        # Mail it anyway. Drive being down is exactly when a summary sitting
+        # only in a local file is most likely to be forgotten.
+        _email_summary_safely(
+            gmail_service,
+            drive_service,
+            meet_url,
+            subject,
+            doc_id=None,
+            doc_title=title,
+            html=html,
+        )
     except Exception as exc:
         safe_log("error", "summary fallback write failed", meeting_url=meet_url, error=str(exc))
+
+
+def _email_summary_safely(
+    gmail_service,
+    drive_service,
+    meet_url: str,
+    subject: str,
+    doc_id: str | None,
+    doc_title: str,
+    html: str,
+) -> None:
+    """Mail the summary to the user as an attachment. Never raises.
+
+    Attaches the Doc exported as PDF when there is one, since that is what
+    opens cleanly on a phone. When Drive failed there is no Doc to export, so
+    the summary itself is attached as HTML rather than sending nothing.
+    """
+    try:
+        if doc_id is not None:
+            data = drive_service.files().export(fileId=doc_id, mimeType="application/pdf").execute()
+            name, mimetype = f"{doc_title}.pdf", "application/pdf"
+        else:
+            data = html.encode("utf-8")
+            name, mimetype = f"{doc_title}.html", "text/html"
+
+        message_id = email_summary(gmail_service, subject, data, name, mimetype)
+        safe_log("info", "summary emailed", meeting_url=meet_url, message_id=message_id)
+    except Exception as exc:
+        # The summary already exists in Drive or on disk; failing to post it
+        # must not look like failing to produce it.
+        safe_log("error", "summary email failed", meeting_url=meet_url, error=str(exc))
 
 
 def _save_credentials(creds: Credentials) -> None:
@@ -564,6 +638,7 @@ def _handle_join(
     registry: ToolRegistry,
     anthropic_client: Anthropic,
     drive_service,
+    gmail_service,
     state: StateStore,
     meet_url: str,
     meeting_info: MeetingInfo,
@@ -689,10 +764,12 @@ def _handle_join(
                     # the call, and summarizing takes seconds.
                     _write_summary_doc(
                         drive_service,
+                        gmail_service,
                         anthropic_client,
                         bridge,
                         meet_url,
                         doc_title,
+                        meeting_info.title,
                         meeting_info.attendees,
                         actions_taken,
                     )
@@ -802,6 +879,7 @@ def run() -> None:
                             registry,
                             anthropic_client,
                             drive_service,
+                            gmail_service,
                             state,
                             decision.meeting_url,
                             meeting_info,
