@@ -43,3 +43,16 @@ def test_uploads_the_html_body_as_html(mock_upload):
     create_doc(service, "Budget sync", "<h1>Budget sync</h1>")
 
     mock_upload.assert_called_once_with(b"<h1>Budget sync</h1>", mimetype="text/html", resumable=False)
+
+
+@patch("mia.gdoc.MediaInMemoryUpload")
+def test_builds_the_url_from_the_id_when_drive_omits_the_link(mock_upload):
+    # The document was created successfully; only the link field is missing.
+    # Raising here would make the caller log a Drive failure and write a
+    # duplicate local copy of a summary that already exists in Drive.
+    service = MagicMock()
+    service.files.return_value.create.return_value.execute.return_value = {"id": "abc123"}
+
+    url = create_doc(service, "Budget sync", "<h1>Budget sync</h1>")
+
+    assert url == "https://docs.google.com/document/d/abc123/edit"

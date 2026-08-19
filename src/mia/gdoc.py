@@ -22,4 +22,12 @@ def create_doc(drive_service, title: str, html_body: str) -> str:
         media_body=media,
         fields="id,webViewLink",
     ).execute()
-    return created["webViewLink"]
+
+    # Derive the URL from the id when Drive omits webViewLink. Reading the key
+    # directly would raise on a request that actually SUCCEEDED, and the caller
+    # treats any exception here as "Drive failed" -- so a real document would
+    # be reported as an error and duplicated into the local fallback. Doc URLs
+    # are deterministic from the id, and id is always returned.
+    if created.get("webViewLink"):
+        return created["webViewLink"]
+    return f"https://docs.google.com/document/d/{created['id']}/edit"

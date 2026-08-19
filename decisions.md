@@ -12,6 +12,29 @@ at the time it's made, not retroactively.
 
 ---
 
+## 2026-08-18 — Resolved: Recall does not echo the bot's own audio back to us
+
+**Why it was open:** the transcript path shipped with no self-echo filter,
+and the spec recorded it as unverified: if Recall's mixed stream carried mia's
+own spoken confirmations, they would land in the transcript as a participant
+and be summarized as meeting discussion.
+
+**Resolved by observation, not argument.** Across three live meetings, none of
+mia's spoken phrases ("On it", her confirmations, her fallback replies) appear
+anywhere in the generated summaries, and no transcript line ever attributed
+her own words to a speaker. Recall excludes the bot's output from the stream
+it sends back.
+
+**A related intuition that does NOT explain it:** using headphones. mia's
+audio is injected by Recall's bot directly into the meeting and never plays
+through the user's speakers, so it cannot loop through the user's microphone
+whatever they are wearing. Acoustic echo and stream echo are different
+mechanisms, and only the second was ever in question here.
+
+**Kept anyway:** `is_self_echo` still guards the STT path. It costs nothing on
+the Recall path and remains load-bearing for `demo_standalone.py`, where
+BlackHole routes injected audio back into capture by design.
+
 ## 2026-08-18 — Action Items may be ticked only from executed tool calls, never inferred
 
 **Why:** The summary doc's checklist marks items mia completed. The obvious
