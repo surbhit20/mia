@@ -2,14 +2,17 @@
 
 A voice agent that joins your Google Meet calls as a live participant,
 listens for a wake word, and acts immediately on spoken commands by calling
-real Google APIs. It's not a notetaker — there's no transcript or summary
-deliverable, and no meeting audio or transcript content is ever persisted
-to disk. Speech is only ever used transiently to detect the wake word and
-capture the command that follows.
+real Google APIs. When the meeting ends she writes a summary to a Google
+Doc and emails it to you, with the things she did during the call already
+ticked off.
 
 Say "Hey Mia" and ask her to block time, look up your schedule, cancel or
 move a meeting, or search your inbox — she confirms out loud once it's
 done.
+
+The meeting transcript is held in memory for the length of the call and
+discarded once the summary is written. What persists is the summary, never
+the record of who said what.
 
 ## Status
 
@@ -33,10 +36,18 @@ and speakers instead of joining a call.
   existing event ("move my 4pm to 3", "make my 4pm an hour")
 - **`find_gmail_messages`** — search your inbox and get a spoken summary
 
-Every command is gated on the wake word — including mid-response, so you
-can interrupt her while she's still talking (barge-in) — and a short
-rolling conversational memory lets follow-up questions and disambiguation
-("which one did you mean?") resolve naturally.
+After the call she also produces a **meeting summary**: a Google Doc with
+a written summary and a single Action Items checklist, emailed to you with
+the Doc attached as a PDF. Items she carried out herself are already
+ticked; everything else is left open. Only tools that actually ran and
+succeeded can be ticked — completion is never inferred from what was said.
+
+Every command is gated on the wake word, and a short rolling conversational
+memory lets follow-up questions and disambiguation ("which one did you
+mean?") resolve naturally. Saying the wake word while she is speaking does
+start a new command, but it cannot cut her off mid-sentence: Recall has no
+interrupt API, so a response plays to completion once sent. Her spoken
+confirmations are short by design, which is what makes that acceptable.
 
 ## How it works
 
@@ -48,6 +59,12 @@ mia executes it against the real Google API, and the result is spoken back
 via ElevenLabs TTS. An explicit turn-state machine
 (idle → listening → command-captured → speaking → cooldown) keeps this
 predictable and prevents mia from reacting to her own voice.
+
+Separately, Recall streams a diarized transcript over the same websocket.
+It accumulates in memory with per-speaker attribution and, once the bot has
+left the call, is summarized by Claude into the Doc. Leaving happens first
+on purpose — Recall bills for time in the call, and summarizing takes
+several seconds.
 
 ## Setup
 
