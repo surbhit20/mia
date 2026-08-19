@@ -80,3 +80,21 @@ def test_from_env_respects_recall_overrides(monkeypatch):
     assert config.recall_websocket_port == 9999
     assert config.recall_bot_name == "Custom Bot"
     assert config.recall_websocket_hostname == "mia-bridge.ngrok.app"
+
+def test_from_env_defaults_wake_aliases(monkeypatch):
+    for k, v in REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("WAKE_ALIASES", raising=False)
+
+    config = Config.from_env()
+
+    assert "mia" in config.wake_aliases
+    # Deliberately absent: also a person's name.
+    assert "amy" not in config.wake_aliases
+
+def test_from_env_respects_wake_aliases_override(monkeypatch):
+    for k, v in REQUIRED_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("WAKE_ALIASES", "bot, robo ,  ")
+
+    assert Config.from_env().wake_aliases == ("bot", "robo")

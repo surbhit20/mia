@@ -28,6 +28,12 @@ class Config:
     logfire_token: str = ""
     wake_word: str = "hey mia"
     fuzzy_threshold: float = 0.75
+    # Mishearings that stand in for the wake word, matched EXACTLY (see
+    # WakeWordMatcher). Deepgram returns these for "hey mia" often enough to
+    # cost a repeat every few commands, and they are too textually distant
+    # from the phrase for any fuzzy threshold to reach. Deliberately excludes
+    # "amy": it is also a person's name, and nothing can tell the two apart.
+    wake_aliases: tuple[str, ...] = ("mia", "hemia", "hamia", "miya", "maya")
     state_file: Path = field(default_factory=lambda: Path("~/.mia/state.json").expanduser())
     recall_api_key: str = ""
     recall_base_url: str = "https://us-west-2.recall.ai"
@@ -52,6 +58,11 @@ class Config:
             logfire_token=os.environ.get("LOGFIRE_TOKEN", ""),
             wake_word=os.environ.get("WAKE_WORD", "hey mia"),
             fuzzy_threshold=float(os.environ.get("FUZZY_THRESHOLD", "0.75")),
+            wake_aliases=tuple(
+                a.strip()
+                for a in os.environ.get("WAKE_ALIASES", "mia,hemia,hamia,miya,maya").split(",")
+                if a.strip()
+            ),
             recall_api_key=os.environ.get("RECALL_API_KEY", ""),
             recall_base_url=os.environ.get("RECALL_BASE_URL", "https://us-west-2.recall.ai"),
             recall_websocket_port=int(os.environ.get("RECALL_WEBSOCKET_PORT", "8765")),

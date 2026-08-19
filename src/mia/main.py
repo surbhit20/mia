@@ -363,7 +363,9 @@ def _run_call_loop(
     actions_taken: list[ToolCallResult],
 ) -> None:
     turn_state = TurnStateMachine()
-    wake_word = WakeWordMatcher(config.wake_word, threshold=config.fuzzy_threshold)
+    wake_word = WakeWordMatcher(
+        config.wake_word, threshold=config.fuzzy_threshold, aliases=config.wake_aliases
+    )
     command_buffer = CommandBuffer()
     vad = FrameVAD(frame_ms=_FRAME_MS)
     history = ConversationHistory()

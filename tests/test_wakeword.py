@@ -93,3 +93,73 @@ def test_still_wakes_on_real_attempts_including_mishearings():
     assert matcher.matches("hey mia block thirty minutes at six pm") is True
     assert matcher.matches("hemia") is True          # heard live, run 3
     assert matcher.matches("hey maya") is True
+
+
+# Every string below was observed live across three real meetings.
+_MISHEARD_ATTEMPTS = ["mia", "hemia", "hamia", "mia block thirty minutes at six pm"]
+_ORDINARY_SPEECH = [
+    "the bigger risk is the migration",
+    "we still don't have a rollback plan for the migration",
+    "in four three months to help with migration",
+    "migration before monday",
+    "the big one is database migration",
+    "media",
+    "the meeting",
+    "my main issue",
+    "i mean",
+    "the mayor said",
+]
+
+
+def _aliased():
+    return WakeWordMatcher(
+        "hey mia", threshold=0.75, aliases=("mia", "hemia", "hamia", "miya", "maya")
+    )
+
+
+def test_aliases_catch_mishearings_fuzzy_scoring_cannot_reach():
+    # "hey mia" comes back as "mia" or "hemia" often enough to cost a repeat
+    # every few commands. These are textually far from the phrase -- no
+    # threshold reaches them without also admitting "media" and "migration".
+    matcher = _aliased()
+
+    for text in _MISHEARD_ATTEMPTS:
+        assert matcher.matches(text) is True, text
+
+
+def test_aliases_do_not_reintroduce_false_wakes():
+    matcher = _aliased()
+
+    for text in _ORDINARY_SPEECH:
+        assert matcher.matches(text) is False, text
+
+
+def test_aliases_are_matched_exactly_not_fuzzily():
+    # The whole point. Fuzzy-matching the alias "mia" scores "media" at 75 and
+    # undoes the false-wake fix; requiring the token to BE the alias does not.
+    matcher = _aliased()
+
+    assert matcher.matches("media") is False
+    assert matcher.matches("mia") is True
+
+
+def test_amy_is_deliberately_not_an_alias():
+    # Phonetically close and observed live, but it is also a person's name and
+    # nothing distinguishes the two. Excluded by choice, not oversight.
+    matcher = _aliased()
+
+    assert matcher.matches("amy") is False
+
+
+def test_strip_removes_the_alias_leaving_the_command():
+    # An alias stands in for the whole phrase, so the command must survive it.
+    matcher = _aliased()
+
+    assert matcher.strip_wake_phrase("mia block thirty minutes") == "block thirty minutes"
+
+
+def test_no_aliases_by_default_keeps_previous_behavior():
+    matcher = WakeWordMatcher("hey mia", threshold=0.75)
+
+    assert matcher.matches("mia") is False
+    assert matcher.matches("hey mia") is True

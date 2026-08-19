@@ -18,15 +18,29 @@ class WakeWordMatcher:
     misheard as "hemia" scored 75, BELOW the false positive. fuzz.ratio
     compares whole strings, so extra characters cost score, which separates
     real attempts (80-100) from incidental matches (29-60) with room to spare.
+
+    Aliases cover what fuzzy scoring cannot. Speech-to-text sometimes returns
+    a mishearing that is phonetically close but textually distant -- "hey mia"
+    came back as "amy", which scores 20 against the phrase and 33 against the
+    name, because the letters are nearly reversed. No threshold reaches those
+    without also admitting "media" and "migration".
+
+    Aliases are therefore matched EXACTLY, never fuzzily. Fuzzy-matching the
+    alias "mia" would readmit "media" at 75 and undo the fix above; requiring
+    the token to BE the alias keeps a loose net for the full phrase and a
+    tight one for single-word fallbacks.
     """
 
-    def __init__(self, wake_word: str, threshold: float = 0.75):
+    def __init__(self, wake_word: str, threshold: float = 0.75, aliases=()):
         self._wake_word = _normalize(wake_word)
         self._window_size = len(self._wake_word.split())
         self._threshold_pct = threshold * 100
+        self._aliases = {_normalize(a) for a in aliases if _normalize(a)}
 
     def matches(self, text: str) -> bool:
         words = _normalize(text).split()
+        if self._aliases.intersection(words):
+            return True
         if len(words) < self._window_size:
             return fuzz.ratio(" ".join(words), self._wake_word) >= self._threshold_pct
         for i in range(len(words) - self._window_size + 1):
@@ -44,6 +58,10 @@ class WakeWordMatcher:
         Returns the normalized text unchanged when no window matches.
         """
         words = _normalize(text).split()
+        if self._aliases.intersection(words):
+            # An alias stands in for the whole phrase, so removing just that
+            # token is what leaves the actual command behind.
+            return " ".join(w for w in words if w not in self._aliases)
         for i in range(max(len(words) - self._window_size + 1, 1)):
             window = " ".join(words[i : i + self._window_size])
             if fuzz.ratio(window, self._wake_word) >= self._threshold_pct:
